@@ -1,0 +1,10 @@
+{
+  "exe": "openocd",
+  "scripts_dir": "",
+  "default_board": "",
+  "default_interface": "interface/stlink.cfg",
+  "default_target": "target/stm32f4x.cfg",
+  "gdb_port": 3333,
+  "telnet_port": 4444,
+  "operation_mode": 1
+}
