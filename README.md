@@ -1,6 +1,155 @@
 # AI Skills — 嵌入式开发调试工具集
 
-一套开源的嵌入式开发调试 Skill 集合，适用于 Claude Code、Codex、Copilot 及其他支持 Skill 协议的 AI 编码助手。覆盖编译构建、烧录调试、总线通信、网络诊断和信息检索等场景。
+**让 AI 不止写代码，还能编译、烧录、调试——补上嵌入式开发自动化的最后一环。**
+
+一套开源的嵌入式开发调试 Skill 集合，适用于 Claude Code、Copilot、TRAE 及其他支持 Skill 协议的 AI 编码助手。安装后，AI 助手即可直接操控编译器、调试器和通信总线，实现从代码编写到硬件验证的全流程自动化。
+
+## 为什么需要这套工具？
+
+### 现状：AI 只能帮你写一半
+
+当前的 AI 编码助手（Claude、Copilot、TRAE 等）已经能很好地辅助方案设计和代码编写。但嵌入式开发不同于纯软件——写完代码只是开始，**编译、烧录、调试**这些与硬件打交道的步骤仍然需要开发者手动完成。
+
+```
+传统流程中 AI 只能覆盖前半段：
+
+  AI 能做的          ┃  仍需人工的
+  ━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━
+  方案设计            ┃  编译构建
+  代码编写            ┃  烧录下载
+  代码审查            ┃  断点调试
+                     ┃  串口/CAN/网络调试
+                     ┃  问题定位与修复
+```
+
+**痛点**：每次 AI 改完代码，你都要手动编译、烧录、观察结果、再把错误信息喂回给 AI——这个循环既低效又打断心流。
+
+### 解决方案：让 AI 自己闭环
+
+这套 Skill 赋予 AI 助手操控硬件工具链的能力，使其能够自主完成完整的开发-调试循环：
+
+```mermaid
+flowchart TD
+    A[AI 编写/修改代码] --> B[AI 调用 keil 编译]
+    B --> C{编译通过？}
+    C -->|有错误| D[AI 读取报错信息]
+    D --> A
+    C -->|通过| E[AI 调用 jlink/openocd 烧录]
+    E --> F[AI 进行调试验证]
+    F --> G{功能正常？}
+    G -->|异常| H[AI 读取调试信息]
+    H --> A
+    G -->|正常| I[✅ 任务完成]
+
+    style A fill:#4CAF50,color:#fff
+    style B fill:#2196F3,color:#fff
+    style E fill:#2196F3,color:#fff
+    style F fill:#FF9800,color:#fff
+    style I fill:#4CAF50,color:#fff
+```
+
+**AI 可以自主执行的完整流程：**
+
+1. **编写代码** → 根据需求生成或修改源文件
+2. **编译检查** → 调用 Keil 编译，读取报错，自动修改直至编译通过
+3. **烧录程序** → 通过 J-Link / OpenOCD 将固件下载到芯片
+4. **断点调试** → 设置断点、单步执行、查看寄存器和内存
+5. **通信调试** → 通过串口 / CAN / 网络读取运行数据，判断程序行为
+6. **自我修正** → 根据调试结果自动调整代码，重复上述循环直到功能达标
+
+### 传统开发 vs AI 赋能开发
+
+```mermaid
+flowchart LR
+    subgraph traditional["🔧 传统开发"]
+        direction TB
+        T1["AI 写代码"] --> T2["人工编译"]
+        T2 --> T3["人工烧录"]
+        T3 --> T4["人工调试"]
+        T4 --> T5["人工反馈给 AI"]
+        T5 --> T1
+    end
+
+    subgraph empowered["🚀 AI + Skills"]
+        direction TB
+        E1["AI 写代码"] --> E2["AI 自主编译"]
+        E2 --> E3["AI 自主烧录"]
+        E3 --> E4["AI 自主调试"]
+        E4 --> E5["AI 自主判断并修正"]
+        E5 --> E1
+    end
+
+    traditional ~~~ empowered
+
+    style traditional fill:#FFF3E0,stroke:#FF9800
+    style empowered fill:#E8F5E9,stroke:#4CAF50
+```
+
+| 对比项 | 传统 AI 辅助 | AI + Skills |
+|--------|-------------|-------------|
+| 代码编写 | ✅ AI 生成 | ✅ AI 生成 |
+| 编译构建 | ❌ 人工操作 | ✅ AI 自主调用 Keil |
+| 烧录下载 | ❌ 人工操作 | ✅ AI 自主调用 J-Link/OpenOCD |
+| 调试验证 | ❌ 人工操作 | ✅ AI 自主断点/寄存器/内存 |
+| 通信调试 | ❌ 人工操作 | ✅ AI 自主串口/CAN/网络 |
+| 错误修正 | ❌ 人工转述给 AI | ✅ AI 自主读取并修正 |
+| **开发闭环** | **❌ 人在回路** | **✅ AI 自主闭环** |
+
+## 架构总览
+
+```mermaid
+graph TB
+    AI["🤖 AI 编码助手<br/>(Claude Code / Copilot / TRAE)"]
+
+    subgraph skills["AI Skills 工具集"]
+        direction LR
+        subgraph build["构建层"]
+            keil["keil<br/>Keil MDK 编译"]
+        end
+        subgraph flash["烧录层"]
+            jlink["jlink<br/>J-Link 调试"]
+            openocd["openocd<br/>OpenOCD 调试"]
+        end
+        subgraph comm["通信层"]
+            serial["serial<br/>串口调试"]
+            can["can<br/>CAN 总线"]
+            net["net<br/>网络调试"]
+        end
+        subgraph ext["辅助"]
+            grok["grok-search<br/>Web 搜索"]
+        end
+    end
+
+    subgraph hw["硬件目标"]
+        MCU["🔌 MCU / SoC"]
+    end
+
+    AI --> skills
+    build --> flash
+    flash --> hw
+    comm --> hw
+    AI --> ext
+
+    style AI fill:#9C27B0,color:#fff
+    style skills fill:#F5F5F5,stroke:#999
+    style build fill:#E3F2FD,stroke:#2196F3
+    style flash fill:#FFF3E0,stroke:#FF9800
+    style comm fill:#E8F5E9,stroke:#4CAF50
+    style ext fill:#F3E5F5,stroke:#9C27B0
+    style hw fill:#FFEBEE,stroke:#F44336
+```
+
+## Skill 一览
+
+| Skill | 用途 | 子命令 |
+|-------|------|--------|
+| **keil** | Keil MDK 工程编译、重建、清理、烧录 | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| **jlink** | J-Link 烧录、读写内存、寄存器、RTT、在线调试 | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
+| **openocd** | OpenOCD 烧录、擦除、GDB Server、目标复位 | `probe` `flash` `erase` `gdb-server` `reset` |
+| **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
+| **can** | CAN/CAN-FD 接口扫描、监控、发帧、DBC 解码 | `scan` `monitor` `send` `log` `decode` `stats` |
+| **net** | 抓包、pcap 分析、连通性测试、端口扫描 | `iface` `capture` `analyze` `ping` `scan` `stats` |
+| **grok-search** | 通过 Grok API 实时 Web 搜索 | — |
 
 ## 安装
 
@@ -55,18 +204,6 @@ cp config.example.json config.json
 | can | `pip install python-can cantools pyserial` + USB-CAN 驱动 |
 | net | Wireshark (tshark), Npcap |
 | grok-search | Grok API 密钥 |
-
-## Skill 一览
-
-| Skill | 用途 | 子命令 |
-|-------|------|--------|
-| **keil** | Keil MDK 工程编译、重建、清理、烧录 | `scan` `targets` `build` `rebuild` `clean` `flash` |
-| **jlink** | J-Link 烧录、读写内存、寄存器、RTT、在线调试 | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
-| **openocd** | OpenOCD 烧录、擦除、GDB Server、目标复位 | `probe` `flash` `erase` `gdb-server` `reset` |
-| **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
-| **can** | CAN/CAN-FD 接口扫描、监控、发帧、DBC 解码 | `scan` `monitor` `send` `log` `decode` `stats` |
-| **net** | 抓包、pcap 分析、连通性测试、端口扫描 | `iface` `capture` `analyze` `ping` `scan` `stats` |
-| **grok-search** | 通过 Grok API 实时 Web 搜索 | — |
 
 ## 各 Skill 详细介绍
 
