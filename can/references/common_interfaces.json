@@ -1,0 +1,22 @@
+{
+  "usb_can_devices": [
+    {"vid": "0C72", "pid": "000C", "name": "PEAK PCAN-USB", "interface": "pcan", "channel": "PCAN_USBBUS1"},
+    {"vid": "0C72", "pid": "0012", "name": "PEAK PCAN-USB FD", "interface": "pcan", "channel": "PCAN_USBBUS1"},
+    {"vid": "0C72", "pid": "0014", "name": "PEAK PCAN-USB Pro FD", "interface": "pcan", "channel": "PCAN_USBBUS1"},
+    {"vid": "1D50", "pid": "606F", "name": "CANable / canable (gs_usb)", "interface": "gs_usb", "channel": "0"},
+    {"vid": "1D50", "pid": "606D", "name": "CANtact (gs_usb)", "interface": "gs_usb", "channel": "0"},
+    {"vid": "AD50", "pid": "60C4", "name": "candleLight (gs_usb)", "interface": "gs_usb", "channel": "0"},
+    {"vid": "1CD2", "pid": "0018", "name": "Kvaser Leaf Light v2", "interface": "kvaser", "channel": "0"},
+    {"vid": "1CD2", "pid": "0008", "name": "Kvaser USBcan II", "interface": "kvaser", "channel": "0"}
+  ],
+  "known_interfaces": [
+    {"interface": "pcan", "platform": "windows", "note": "需安装 PEAK 驱动"},
+    {"interface": "vector", "platform": "windows", "note": "需安装 Vector XL Driver Library"},
+    {"interface": "ixxat", "platform": "windows", "note": "需安装 IXXAT VCI 驱动"},
+    {"interface": "kvaser", "platform": "windows/linux", "note": "需安装 Kvaser CANlib"},
+    {"interface": "slcan", "platform": "windows/linux", "note": "串口转 CAN，需 pyserial"},
+    {"interface": "socketcan", "platform": "linux", "note": "Linux 内核原生支持"},
+    {"interface": "gs_usb", "platform": "linux", "note": "candleLight/CANable 等 gs_usb 固件设备"},
+    {"interface": "virtual", "platform": "all", "note": "虚拟总线，用于测试"}
+  ]
+}
