@@ -96,8 +96,19 @@ def wait_server_ready(proc: subprocess.Popen, gdb_port: int, timeout: int = 15) 
         return False, errors
 
     # 就绪了，但如果有严重错误仍然报错
-    critical_errors = [e for e in errors if any(k in e.lower() for k in
-                       ["open failed", "init mode failed", "no device found", "cannot connect"])]
+    critical_keywords = [
+        "open failed",
+        "init mode failed",
+        "no device found",
+        "cannot connect",
+        "error connecting dp",
+        "examination failed",
+        "failed to read memory",
+        "failed to write memory",
+        "cannot read idr",
+        "polling failed",
+    ]
+    critical_errors = [e for e in errors if any(k in e.lower() for k in critical_keywords)]
     if critical_errors:
         return False, critical_errors
 
@@ -119,7 +130,7 @@ def cleanup(proc: subprocess.Popen):
 
 def output_json(data: dict):
     sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    print(json.dumps(data, ensure_ascii=False, indent=2), flush=True)
 
 
 def main():
@@ -147,7 +158,7 @@ def main():
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr)
+            print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
         sys.exit(1)
 
     cmd = build_openocd_cmd(
@@ -188,16 +199,16 @@ def main():
             output_json(result)
         else:
             if result["status"] == "ok":
-                print(f"[gdb-server] GDB Server 已就绪")
-                print(f"  GDB 端口: {args.gdb_port}")
-                print(f"  Telnet 端口: {args.telnet_port}")
-                print(f"  PID: {proc.pid}")
-                print(f"  连接: arm-none-eabi-gdb -ex 'target remote localhost:{args.gdb_port}'")
+                print(f"[gdb-server] GDB Server 已就绪", flush=True)
+                print(f"  GDB 端口: {args.gdb_port}", flush=True)
+                print(f"  Telnet 端口: {args.telnet_port}", flush=True)
+                print(f"  PID: {proc.pid}", flush=True)
+                print(f"  连接: arm-none-eabi-gdb -ex 'target remote localhost:{args.gdb_port}'", flush=True)
                 if errors:
-                    print(f"  警告: {'; '.join(errors)}")
+                    print(f"  警告: {'; '.join(errors)}", flush=True)
             else:
                 err = result.get("error", {})
-                print(f"[gdb-server] 失败 — {err.get('message', '未知错误')}", file=sys.stderr)
+                print(f"[gdb-server] 失败 — {err.get('message', '未知错误')}", file=sys.stderr, flush=True)
                 sys.exit(1)
 
         # GDB Server 模式：如果成功启动，保持运行直到用户终止
@@ -216,7 +227,7 @@ def main():
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr)
+            print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
         sys.exit(1)
     finally:
         if proc:

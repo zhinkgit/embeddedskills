@@ -6,7 +6,7 @@ Claude Code skill，通过 OpenOCD 进行探针探测、固件烧录、Flash 擦
 
 - 探针与目标连通性探测
 - 固件烧录（.elf / .hex / .bin）
-- Flash 擦除
+- Flash 擦除（支持 `auto|mass|sector` 模式）
 - GDB Server 启动（供 GDB 连接进行源码级调试）
 - 目标复位（支持 halt/run 模式）
 
@@ -45,3 +45,10 @@ Claude Code skill，通过 OpenOCD 进行探针探测、固件烧录、Flash 擦
 | `operation_mode` | 否 | `1` 直接执行 / `2` 输出风险摘要 / `3` 执行前确认 |
 
 > 提示：设置了 `default_board` 时，`default_interface` 和 `default_target` 可以不填。
+
+## 擦除行为
+
+- `erase --mode auto`：优先使用 target 映射到的 mass erase，未命中时回退 sector erase
+- `erase --mode mass`：强制整片擦除；当前 target 没有映射时返回 `mass_erase_unsupported`
+- `erase --mode sector`：强制按 bank 执行 `flash erase_sector <bank> 0 last`
+- `.bin` 烧录必须显式提供地址，例如 `0x08000000`

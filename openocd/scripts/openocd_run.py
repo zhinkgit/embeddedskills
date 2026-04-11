@@ -21,10 +21,13 @@ ERROR_PATTERNS = [
     (r"Error:\s*Could not verify flash", "verify_failed", "固件校验失败，Flash 可能损坏或写保护"),
     (r"Error:\s*flash write failed", "flash_write_failed", "Flash 写入失败，请检查固件文件和目标状态"),
     (r"Error:\s*timed out while waiting for target halted", "target_timeout", "等待目标暂停超时，请检查连接"),
+    (r"Error:\s*Target not halted", "target_not_halted", "目标未暂停，擦除或写入前需要先 halt 目标"),
     (r"Error:\s*couldn't bind .+ to socket", "port_busy", "端口被占用，请检查是否有其他 OpenOCD 实例运行"),
     (r"Error:\s*Target not examined yet", "target_not_examined", "目标未初始化，请检查 target 配置"),
     (r"Error:\s*flash bank", "flash_bank_error", "Flash bank 配置错误，请确认 target 配置匹配芯片"),
     (r"Error:\s*device is read protected", "read_protected", "芯片读保护已开启，需要先解锁（本工具不自动解锁）"),
+    (r"failed erasing sectors", "erase_failed", "Flash 扇区擦除失败，请检查目标是否 halt、读写保护状态及 flash bank 配置"),
+    (r"mass erase failed", "mass_erase_failed", "整片擦除失败，请检查目标是否 halt、读写保护状态及 target 配置"),
     (r"Error:\s*Cannot connect", "cannot_connect", "无法连接目标，请检查连线、供电和接口类型"),
     (r"Error:\s*Could not connect", "cannot_connect", "无法连接目标，请检查连线、供电和接口类型"),
 ]
@@ -115,16 +118,60 @@ def parse_output(combined: str, action: str) -> dict:
             result["programmed"] = True
 
     elif action == "erase":
-        if "erased" in combined.lower() or "mass erase complete" in combined.lower():
+        if "erased sectors" in combined.lower():
             result["erased"] = True
+            result["mode"] = "sector"
+            sector_match = re.search(r"erased sectors\s+(\d+)\s+through\s+(\d+)\s+on flash bank\s+(\d+)\s+in\s+([\d.]+)s", combined, re.IGNORECASE)
+            if sector_match:
+                result["first_sector"] = int(sector_match.group(1))
+                result["last_sector"] = int(sector_match.group(2))
+                result["bank"] = int(sector_match.group(3))
+                result["elapsed_s"] = float(sector_match.group(4))
+        elif "mass erase complete" in combined.lower():
+            result["erased"] = True
+            result["mode"] = "mass"
 
     return result
+
+
+def infer_mass_erase_command(target: str, board: str) -> str:
+    """根据 target/board 推断可用的 mass erase 命令"""
+    cfg = (target or board).lower()
+
+    command_map = {
+        "stm32f0": "stm32f1x mass_erase 0",
+        "stm32f1": "stm32f1x mass_erase 0",
+        "stm32f2": "stm32f2x mass_erase 0",
+        "stm32f3": "stm32f1x mass_erase 0",
+        "stm32f4": "stm32f4x mass_erase 0",
+        "stm32f7": "stm32f2x mass_erase 0",
+        "stm32g0": "stm32l4x mass_erase 0",
+        "stm32g4": "stm32l4x mass_erase 0",
+        "stm32h7": "stm32h7x mass_erase 0",
+        "stm32l0": "stm32l0x mass_erase 0",
+        "stm32l1": "stm32lx mass_erase 0",
+        "stm32l4": "stm32l4x mass_erase 0",
+        "stm32u5": "stm32l4x mass_erase 0",
+        "stm32wb": "stm32l4x mass_erase 0",
+        "stm32wl": "stm32l4x mass_erase 0",
+        "stm32mp13": "stm32mp15x mass_erase 0",
+        "stm32mp15": "stm32mp15x mass_erase 0",
+        "gd32f1": "stm32f1x mass_erase 0",
+        "gd32f3": "stm32f1x mass_erase 0",
+        "gd32f4": "stm32f4x mass_erase 0",
+        "gd32e10": "stm32f1x mass_erase 0",
+    }
+
+    for key, command in command_map.items():
+        if key in cfg:
+            return command
+    return ""
 
 
 def run_openocd(exe: str, action: str, board: str = "", interface: str = "",
                 target: str = "", search: str = "", adapter_speed: str = "",
                 transport: str = "", file: str = "", address: str = "",
-                reset_mode: str = "run", bank: str = "") -> dict:
+                reset_mode: str = "run", bank: str = "", erase_mode: str = "auto") -> dict:
     """执行 OpenOCD 命令"""
     start_time = time.time()
 
@@ -174,11 +221,24 @@ def run_openocd(exe: str, action: str, board: str = "", interface: str = "",
 
     elif action == "erase":
         bank_idx = bank if bank else "0"
-        extra_commands = [
-            "init",
-            f"flash erase_sector {bank_idx} 0 last",
-            "shutdown",
-        ]
+        mass_erase_cmd = infer_mass_erase_command(target, board)
+        extra_commands = ["init", "reset halt"]
+        if erase_mode == "mass":
+            if not mass_erase_cmd:
+                return {
+                    "status": "error",
+                    "action": action,
+                    "error": {"code": "mass_erase_unsupported", "message": "当前 target/board 未配置 mass erase 命令，请改用 --mode sector 或补充映射"},
+                }
+            extra_commands.append(mass_erase_cmd)
+        elif erase_mode == "sector":
+            extra_commands.append(f"flash erase_sector {bank_idx} 0 last")
+        else:
+            if mass_erase_cmd:
+                extra_commands.append(mass_erase_cmd)
+            else:
+                extra_commands.append(f"flash erase_sector {bank_idx} 0 last")
+        extra_commands.append("shutdown")
 
     elif action == "reset":
         if reset_mode == "halt":
@@ -250,6 +310,11 @@ def run_openocd(exe: str, action: str, board: str = "", interface: str = "",
     # 补充 flash 摘要
     if action == "flash" and "speed_kbps" in parsed:
         summary = f"烧录成功，{parsed['bytes_written']} bytes @ {parsed['speed_kbps']} KiB/s"
+    elif action == "erase" and parsed.get("erased"):
+        if parsed.get("mode") == "mass":
+            summary = "Flash 整片擦除成功"
+        elif parsed.get("mode") == "sector":
+            summary = f"Flash 扇区擦除成功（bank {parsed.get('bank', bank or '0')}，sector {parsed.get('first_sector', 0)}-{parsed.get('last_sector', 'last')}）"
 
     details = {
         "elapsed_ms": elapsed_ms,
@@ -318,7 +383,7 @@ def main():
     parser.add_argument("--transport", default="", choices=["", "swd", "jtag"], help="传输协议")
     parser.add_argument("--file", default="", help="固件文件路径（flash 用）")
     parser.add_argument("--address", default="", help="烧录地址（flash .bin 用）")
-    parser.add_argument("--mode", default="run", choices=["halt", "run", "init"], help="复位模式（reset 用）")
+    parser.add_argument("--mode", default="run", choices=["halt", "run", "init", "auto", "mass", "sector"], help="reset 用于复位模式；erase 用于擦除模式")
     parser.add_argument("--bank", default="", help="Flash bank 编号（erase 用，默认 0）")
     parser.add_argument("--json", action="store_true", dest="as_json")
 
@@ -348,8 +413,9 @@ def main():
         transport=args.transport,
         file=args.file,
         address=args.address,
-        reset_mode=args.mode,
+        reset_mode=args.mode if args.action == "reset" else "run",
         bank=args.bank,
+        erase_mode=args.mode if args.action == "erase" else "auto",
     )
 
     if args.as_json:
@@ -366,6 +432,10 @@ def main():
                 print(f"  JTAG TAP: {details['jtag_tap']}")
             if "verified" in details:
                 print(f"  校验: {'通过' if details['verified'] else '失败'}")
+            if details.get("mode") == "mass":
+                print("  擦除模式: mass")
+            elif details.get("mode") == "sector":
+                print(f"  擦除模式: sector (bank {details.get('bank', 0)}, sector {details.get('first_sector', 0)}-{details.get('last_sector', 'last')})")
         else:
             err = result.get("error", {})
             print(f"[{args.action}] 失败 — {err.get('message', '未知错误')}", file=sys.stderr)
