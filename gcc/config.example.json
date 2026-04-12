@@ -1,0 +1,8 @@
+{
+  "cmake_exe": "cmake",
+  "toolchain_prefix": "arm-none-eabi-",
+  "toolchain_path": "",
+  "default_preset": "",
+  "log_dir": ".build",
+  "operation_mode": 1
+}
