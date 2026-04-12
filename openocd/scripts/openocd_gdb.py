@@ -90,6 +90,7 @@ def wait_server_ready(proc: subprocess.Popen, gdb_port: int, timeout: int = 15) 
 
         if f"Listening on port {gdb_port}" in line or "listening on" in line.lower():
             ready = True
+            break
 
     if not ready:
         return False, errors

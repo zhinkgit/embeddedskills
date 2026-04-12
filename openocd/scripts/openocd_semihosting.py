@@ -79,6 +79,7 @@ def wait_server_ready(proc: subprocess.Popen, telnet_port: int, timeout: int = 1
             errors.append(line)
         if f"Listening on port {telnet_port}" in line or "listening on" in line.lower():
             ready = True
+            break
 
     if not ready:
         return False, errors

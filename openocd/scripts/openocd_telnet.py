@@ -74,6 +74,7 @@ def wait_server_ready(proc: subprocess.Popen, telnet_port: int, timeout: int = 1
             errors.append(line)
         if f"Listening on port {telnet_port}" in line or "listening on" in line.lower():
             ready = True
+            break
 
     if not ready:
         return False, errors
@@ -115,6 +116,22 @@ class TelnetConnection:
         self.sock = None
         self._buf = b""
 
+    @staticmethod
+    def _strip_iac(data: bytes) -> bytes:
+        """过滤 Telnet IAC 协商字节和 NUL 字符"""
+        clean = bytearray()
+        i = 0
+        while i < len(data):
+            b = data[i]
+            if b == 0xff and i + 2 < len(data):
+                i += 3  # 跳过 IAC + cmd + option
+            elif b == 0x00:
+                i += 1  # 跳过 NUL
+            else:
+                clean.append(b)
+                i += 1
+        return bytes(clean)
+
     def connect(self, retries: int = 3, retry_delay: float = 0.5):
         """连接到 Telnet 端口，支持重试"""
         for i in range(retries):
@@ -143,30 +160,34 @@ class TelnetConnection:
     def _read_until_prompt(self) -> str:
         """读取数据直到出现 '> ' 提示符"""
         while True:
-            # 检查缓冲区中是否有提示符
-            decoded = self._buf.decode("utf-8", errors="replace")
-            # OpenOCD 提示符: "\r\n> " 或开头 "> "
+            # 过滤 IAC 和 NUL，再解码
+            clean = self._strip_iac(self._buf)
+            decoded = clean.decode("utf-8", errors="replace")
+            # OpenOCD 提示符: "\r\n> " 或 "\r> " 或末尾 "> "
             prompt_pos = decoded.rfind("\n> ")
             if prompt_pos == -1:
                 prompt_pos = decoded.rfind("\r> ")
             if prompt_pos == -1 and decoded.endswith("> "):
-                # 可能是整个响应末尾
                 prompt_pos = len(decoded) - 2
             if prompt_pos >= 0:
                 response = decoded[:prompt_pos]
-                # 清空已消费的缓冲
                 self._buf = b""
-                return response.strip()
+                # 去除命令回显（第一行通常是发送的命令本身）
+                lines = response.split("\n")
+                if lines:
+                    lines = [l.rstrip("\r") for l in lines]
+                return "\n".join(lines).strip()
             try:
                 chunk = self.sock.recv(4096)
                 if not chunk:
-                    # 连接关闭
-                    response = self._buf.decode("utf-8", errors="replace")
+                    clean = self._strip_iac(self._buf)
+                    response = clean.decode("utf-8", errors="replace")
                     self._buf = b""
                     return response.strip()
                 self._buf += chunk
             except socket.timeout:
-                response = self._buf.decode("utf-8", errors="replace")
+                clean = self._strip_iac(self._buf)
+                response = clean.decode("utf-8", errors="replace")
                 self._buf = b""
                 return response.strip()
 
@@ -186,40 +207,30 @@ class TelnetConnection:
 
 # ── 输出解析 ──────────────────────────────────────────────────
 
-def parse_halt_response(raw: str) -> dict:
-    """解析 halt 响应"""
+def parse_reg_single(raw: str) -> dict:
+    """解析单个寄存器查询结果: 'regname (/bits): 0xVALUE' 或 'regname 0xVALUE'"""
     result = {}
-    # target halted due to debug-request, current mode: Thread
-    # xPSR: 0x01000000 pc: 0x08000298 msp: 0x20020000
-    m = re.search(r"pc:\s*(0x[0-9a-fA-F]+)", raw)
+    # 格式1: pc (/32): 0x080009dc
+    m = re.search(r"(\w+)\s+\(/\d+\):\s*(0x[0-9a-fA-F]+)", raw)
     if m:
-        result["pc"] = m.group(1)
-    m = re.search(r"xPSR:\s*(0x[0-9a-fA-F]+)", raw)
+        result[m.group(1)] = m.group(2)
+        return result
+    # 格式2: pc 0x080009dc（get_reg 格式）
+    m = re.search(r"(\w+)\s+(0x[0-9a-fA-F]+)", raw)
     if m:
-        result["xpsr"] = m.group(1)
-    m = re.search(r"msp:\s*(0x[0-9a-fA-F]+)", raw)
-    if m:
-        result["msp"] = m.group(1)
-    m = re.search(r"psp:\s*(0x[0-9a-fA-F]+)", raw)
-    if m:
-        result["psp"] = m.group(1)
-    m = re.search(r"current mode:\s*(\S+)", raw)
-    if m:
-        result["mode"] = m.group(1)
-    if "target halted" in raw.lower():
-        result["halted"] = True
+        result[m.group(1)] = m.group(2)
     return result
 
 
 def parse_reg_response(raw: str) -> dict:
-    """解析 reg 命令输出"""
+    """解析 reg 命令输出（全部寄存器）"""
     registers = {}
-    # 格式: (NN) regname (/bits): 0xVALUE
+    # halt 后 reg 输出格式: (N) regname (/bits): 0xVALUE
     for m in re.finditer(r"\(\d+\)\s+(\S+)\s+\(/\d+\):\s*(0x[0-9a-fA-F]+)", raw):
         registers[m.group(1)] = m.group(2)
-    # 备用格式: regname (0xNN): 0xVALUE
+    # 备用格式: regname (/bits): 0xVALUE（无序号）
     if not registers:
-        for m in re.finditer(r"(\w+)\s*(?:\([^)]*\))?\s*:\s*(0x[0-9a-fA-F]+)", raw):
+        for m in re.finditer(r"(\w+)\s+\(/\d+\):\s*(0x[0-9a-fA-F]+)", raw):
             registers[m.group(1)] = m.group(2)
     return registers
 
@@ -232,12 +243,6 @@ def parse_mem_response(raw: str) -> list:
         data = m.group(2).strip()
         memory.append({"address": addr, "data": data})
     return memory
-
-
-def parse_step_response(raw: str) -> dict:
-    """解析 step 响应（每步后 OpenOCD 输出 halt 信息）"""
-    result = parse_halt_response(raw)
-    return result
 
 
 # ── 主逻辑 ────────────────────────────────────────────────────
@@ -377,10 +382,16 @@ def execute_action(telnet: TelnetConnection, args) -> dict:
     start_time = time.time()
 
     if action == "halt":
-        raw = telnet.send("halt")
-        # 给 OpenOCD 一点时间输出 halt 信息
+        telnet.send("halt")
         time.sleep(0.1)
-        parsed = parse_halt_response(raw)
+        # halt 的状态信息输出在 stderr 而非 Telnet 响应，需要额外查询
+        pc_raw = telnet.send("reg pc")
+        xpsr_raw = telnet.send("reg xpsr")
+        msp_raw = telnet.send("reg msp")
+        pc_regs = parse_reg_single(pc_raw)
+        xpsr_regs = parse_reg_single(xpsr_raw)
+        msp_regs = parse_reg_single(msp_raw)
+        parsed = {"halted": True, **pc_regs, **xpsr_regs, **msp_regs}
         pc = parsed.get("pc", "?")
         return {
             "status": "ok", "action": "halt",
@@ -399,23 +410,35 @@ def execute_action(telnet: TelnetConnection, args) -> dict:
     elif action == "step":
         count = args.count
         steps = []
-        last_parsed = {}
         for i in range(count):
-            raw = telnet.send("step")
-            time.sleep(0.05)
-            parsed = parse_step_response(raw)
-            steps.append({"step": i + 1, "pc": parsed.get("pc", "?")})
-            last_parsed = parsed
-        pc = last_parsed.get("pc", "?")
+            telnet.send("step")
+            time.sleep(0.15)
+            pc_raw = telnet.send("reg pc")
+            pc_regs = parse_reg_single(pc_raw)
+            pc = pc_regs.get("pc", "?")
+            steps.append({"step": i + 1, "pc": pc})
+        last_pc = steps[-1]["pc"] if steps else "?"
         return {
             "status": "ok", "action": "step",
-            "summary": f"单步{count}次，PC={pc}",
-            "details": {"steps": steps, **last_parsed},
+            "summary": f"单步{count}次，PC={last_pc}",
+            "details": {"steps": steps, "pc": last_pc},
         }
 
     elif action == "reg":
-        raw = telnet.send("reg")
-        registers = parse_reg_response(raw)
+        # 确保目标已 halt
+        telnet.send("halt")
+        time.sleep(0.1)
+        # OpenOCD 的 reg（列出全部）不显示值，需要逐个查询核心寄存器
+        core_reg_names = [
+            "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+            "r8", "r9", "r10", "r11", "r12", "sp", "lr", "pc",
+            "xpsr", "msp", "psp", "primask", "basepri", "faultmask", "control",
+        ]
+        registers = {}
+        for name in core_reg_names:
+            raw = telnet.send(f"reg {name}")
+            parsed = parse_reg_single(raw)
+            registers.update(parsed)
         return {
             "status": "ok", "action": "reg",
             "summary": f"读取到 {len(registers)} 个寄存器",
@@ -473,7 +496,7 @@ def execute_action(telnet: TelnetConnection, args) -> dict:
         }
 
     elif action == "run-to":
-        # 设置断点 -> resume -> 等待 -> halt -> 检查 PC -> 移除断点
+        # 设置断点 -> resume -> 等待 -> halt -> 查 PC -> 移除断点
         bp_raw = telnet.send(f"bp {args.address} {args.bp_length} hw")
         if "error" in bp_raw.lower() or "failed" in bp_raw.lower():
             return {
@@ -482,22 +505,22 @@ def execute_action(telnet: TelnetConnection, args) -> dict:
             }
 
         telnet.send("resume")
-        # 等待目标命中断点
         timeout_s = args.timeout_ms / 1000.0
         time.sleep(timeout_s)
 
-        halt_raw = telnet.send("halt")
+        telnet.send("halt")
         time.sleep(0.1)
-        parsed = parse_halt_response(halt_raw)
-        pc = parsed.get("pc", "")
+        pc_raw = telnet.send("reg pc")
+        pc_regs = parse_reg_single(pc_raw)
+        pc = pc_regs.get("pc", "")
 
         # 移除断点
         telnet.send(f"rbp {args.address}")
 
-        # 判断是否命中
+        # 判断是否命中（比较 PC 和断点地址）
         bp_hit = False
         if pc:
-            bp_hit = pc.lower().rstrip("l") == args.address.lower().rstrip("l")
+            bp_hit = int(pc, 16) == int(args.address, 16)
 
         if bp_hit:
             summary = f"断点命中 @ {args.address}，PC={pc}"
@@ -511,7 +534,7 @@ def execute_action(telnet: TelnetConnection, args) -> dict:
                 "bp_address": args.address,
                 "bp_hit": bp_hit,
                 "timeout_ms": args.timeout_ms,
-                **parsed,
+                "pc": pc,
             },
         }
 
