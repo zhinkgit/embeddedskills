@@ -1,16 +1,17 @@
 ---
 name: keil
 description: >-
-  Keil MDK 工程构建与烧录工具，用于扫描 .uvprojx/.uvmpw 工程、枚举 Target、执行
-  build/rebuild/clean/flash 并解析构建日志。当用户提到 Keil、MDK、uVision、UV4、
+  Keil MDK 工程构建工具，用于扫描 .uvprojx/.uvmpw 工程、枚举 Target、执行
+  build/rebuild/clean 并解析构建日志，返回可供 jlink/openocd 复用的产物路径。
+  flash 子命令仅作为兼容入口保留。当用户提到 Keil、MDK、uVision、UV4、
   Target 枚举、编译、重建、清理、烧录、下载固件、flash 时自动触发，也兼容 /keil 显式调用。
   即使用户只是说"编译一下"或"烧录到板子上"，只要上下文涉及嵌入式 Keil 工程就应触发此 skill。
 argument-hint: "[scan|targets|build|rebuild|clean|flash] ..."
 ---
 
-# Keil MDK 工程构建与烧录
+# Keil MDK 工程构建
 
-本 skill 提供 Keil MDK 工程的发现、Target 枚举、构建、重建、清理和烧录能力。
+本 skill 提供 Keil MDK 工程的发现、Target 枚举、构建、重建、清理能力，并返回可供 `jlink/openocd` 继续使用的固件产物路径。`flash` 仅作为兼容入口保留。
 
 ## 配置
 
@@ -39,7 +40,7 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 | `build` | 增量编译 | 中 |
 | `rebuild` | 全量重建 | 中 |
 | `clean` | 清理工程 | 高 |
-| `flash` | 通过 Keil 烧录固件 | 高 |
+| `flash` | 通过 Keil 烧录固件（兼容入口，优先建议使用 jlink/openocd） | 高 |
 
 ## 执行流程
 
@@ -48,8 +49,9 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 3. 未提供工程路径时先执行 `scan` 搜索工程
 4. 同时发现多个工程或多个 Target 时，列出选项让用户选择，绝不自动猜测
 5. `build/rebuild/clean` 按 `operation_mode` 决定是否需要确认
-6. `flash` 仅在最近一次构建成功时允许执行
-7. 所有构建命令输出到日志文件后解析，返回结构化结果
+6. `build/rebuild` 成功后，尽量从工程配置中解析 `flash_file` / `debug_file` 等产物路径
+7. `flash` 仅在最近一次构建成功时允许执行
+8. 所有构建命令输出到日志文件后解析，返回结构化结果
 
 ## 脚本调用
 
@@ -88,7 +90,13 @@ python <skill-dir>/scripts/keil_build.py <build|rebuild|clean|flash> \
   "status": "ok",
   "action": "build",
   "summary": { "errors": 0, "warnings": 2, "flash_bytes": 32768, "ram_bytes": 8192 },
-  "details": { "project": "project.uvprojx", "target": "Debug", "log_file": ".build/project-Debug-build.log" }
+  "details": {
+    "project": "project.uvprojx",
+    "target": "Debug",
+    "log_file": ".build/project-Debug-build.log",
+    "flash_file": "Objects/project.hex",
+    "debug_file": "Objects/project.axf"
+  }
 }
 ```
 
@@ -105,10 +113,11 @@ python <skill-dir>/scripts/keil_build.py <build|rebuild|clean|flash> \
 
 - 不修改工程配置文件（.uvprojx / .uvmpw / .uvoptx）
 - 不自动猜测工程路径或 Target，有歧义时必须询问用户
+- 构建成功后优先使用返回的 `flash_file` / `debug_file` 与 `jlink/openocd` 串联
 - `flash` 前必须确认最近一次构建成功（errors == 0）
 - `clean` 不在自动流程中隐式执行
 - 构建失败时优先展示首个错误和日志文件路径
-- 结果回显中始终包含工程名、Target 名、日志路径
+- 结果回显中始终包含工程名、Target 名、日志路径；若识别到产物路径也要回显
 
 ## 参考
 

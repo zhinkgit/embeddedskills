@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -59,6 +60,96 @@ def parse_log(log_path: str) -> dict:
         summary["ram_bytes"] = rw_data + zi_data
 
     return summary
+
+
+def _resolve_path(base_dir: Path, raw_path: str) -> Path:
+    raw_path = (raw_path or "").strip()
+    if not raw_path:
+        return base_dir
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return (base_dir / path).resolve()
+
+
+def _collect_target_artifacts(project_path: Path, target: str) -> dict:
+    """从 .uvprojx 中解析输出目录和名称，推断构建产物路径。"""
+    if project_path.suffix.lower() != ".uvprojx":
+        return {}
+
+    try:
+        root = ET.parse(str(project_path)).getroot()
+    except (ET.ParseError, OSError):
+        return {}
+
+    target_el = None
+    fallback_target = None
+    for item in root.iter("Target"):
+        name_el = item.find("TargetName")
+        if name_el is None or not name_el.text:
+            continue
+        if fallback_target is None:
+            fallback_target = item
+        if target and name_el.text.strip() == target:
+            target_el = item
+            break
+
+    if target_el is None:
+        target_el = fallback_target
+    if target_el is None:
+        return {}
+
+    common = target_el.find("TargetOption/TargetCommonOption")
+    if common is None:
+        return {}
+
+    output_dir = _resolve_path(
+        project_path.parent,
+        common.findtext("OutputDirectory", default=""),
+    )
+    output_name = common.findtext("OutputName", default="").strip() or project_path.stem
+
+    candidates = {
+        "axf_file": output_dir / f"{output_name}.axf",
+        "elf_file": output_dir / f"{output_name}.elf",
+        "hex_file": output_dir / f"{output_name}.hex",
+        "bin_file": output_dir / f"{output_name}.bin",
+    }
+
+    details = {}
+    for key, path in candidates.items():
+        if path.exists():
+            details[key] = str(path.resolve())
+
+    if not details and output_dir.exists():
+        for suffix, key in (
+            (".axf", "axf_file"),
+            (".elf", "elf_file"),
+            (".hex", "hex_file"),
+            (".bin", "bin_file"),
+        ):
+            matches = sorted(
+                output_dir.rglob(f"{output_name}*{suffix}"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if matches:
+                details[key] = str(matches[0].resolve())
+
+    debug_file = details.get("elf_file") or details.get("axf_file")
+    flash_file = (
+        details.get("hex_file")
+        or details.get("bin_file")
+        or details.get("elf_file")
+        or details.get("axf_file")
+    )
+    if debug_file:
+        details["debug_file"] = debug_file
+    if flash_file:
+        details["flash_file"] = flash_file
+    if output_dir.exists():
+        details["output_dir"] = str(output_dir)
+    return details
 
 
 def run_uv4(uv4_exe: str, action: str, project: str, target: str,
@@ -122,6 +213,8 @@ def run_uv4(uv4_exe: str, action: str, project: str, target: str,
     else:
         status = "ok"
 
+    artifact_details = _collect_target_artifacts(project_path, target)
+
     return {
         "status": status,
         "action": action,
@@ -132,6 +225,7 @@ def run_uv4(uv4_exe: str, action: str, project: str, target: str,
             "log_file": str(log_file),
             "errorlevel": errorlevel,
             "errorlevel_desc": el_msg,
+            **artifact_details,
         },
     }
 

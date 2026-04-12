@@ -2,6 +2,8 @@
 
 基于 CMake + arm-none-eabi-gcc 的嵌入式工程构建工具。
 
+范围说明：当前仅支持 **CMake 型** 嵌入式 GCC 工程，不覆盖纯 `Makefile` 工程。
+
 ## 环境要求
 
 - **CMake** >= 3.21（支持 CMakePresets.json v3）
@@ -26,3 +28,5 @@
 | `rebuild` | 全量重建 |
 | `clean` | 清理构建目录 |
 | `size` | 分析 ELF 大小 |
+
+`build/rebuild` 成功后会返回 `elf_file`，便于继续交给 `jlink/openocd` 做烧录和调试。

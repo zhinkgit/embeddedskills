@@ -32,7 +32,7 @@
 
 ```mermaid
 flowchart TD
-    A[AI 编写/修改代码] --> B[AI 调用 keil 编译]
+    A[AI 编写/修改代码] --> B[AI 调用 keil/gcc 编译]
     B --> C{编译通过？}
     C -->|有错误| D[AI 读取报错信息]
     D --> A
@@ -53,7 +53,7 @@ flowchart TD
 **AI 可以自主执行的完整流程：**
 
 1. **编写代码** → 根据需求生成或修改源文件
-2. **编译检查** → 调用 Keil 编译，读取报错，自动修改直至编译通过
+2. **编译检查** → 调用 Keil / GCC 编译，读取报错，自动修改直至编译通过
 3. **烧录程序** → 通过 J-Link / OpenOCD 将固件下载到芯片
 4. **断点调试** → 设置断点、单步执行、查看寄存器和内存
 5. **通信调试** → 通过串口 / CAN / 网络读取运行数据，判断程序行为
@@ -90,7 +90,7 @@ flowchart LR
 | 对比项 | 传统 AI 辅助 | AI + Skills |
 |--------|-------------|-------------|
 | 代码编写 | ✅ AI 生成 | ✅ AI 生成 |
-| 编译构建 | ❌ 人工操作 | ✅ AI 自主调用 Keil |
+| 编译构建 | ❌ 人工操作 | ✅ AI 自主调用 Keil / GCC |
 | 烧录下载 | ❌ 人工操作 | ✅ AI 自主调用 J-Link/OpenOCD |
 | 调试验证 | ❌ 人工操作 | ✅ AI 自主断点/寄存器/内存 |
 | 通信调试 | ❌ 人工操作 | ✅ AI 自主串口/CAN/网络 |
@@ -107,6 +107,7 @@ graph TB
         direction LR
         subgraph build["构建层"]
             keil["keil<br/>Keil MDK 编译"]
+            gcc["gcc<br/>CMake GCC 编译"]
         end
         subgraph flash["烧录层"]
             jlink["jlink<br/>J-Link 调试"]
@@ -127,22 +128,41 @@ graph TB
     build --> flash
     flash --> hw
     comm --> hw
-    AI --> ext
 
     style AI fill:#9C27B0,color:#fff
     style skills fill:#F5F5F5,stroke:#999
     style build fill:#E3F2FD,stroke:#2196F3
     style flash fill:#FFF3E0,stroke:#FF9800
     style comm fill:#E8F5E9,stroke:#4CAF50
-    style ext fill:#F3E5F5,stroke:#9C27B0
     style hw fill:#FFEBEE,stroke:#F44336
 ```
 
 ## Skill 一览
 
+## 二维分类
+
+### 按工程类型分类
+
+| 类别 | 识别方式 | 主职责 |
+|------|----------|--------|
+| **Keil 工程** | 识别 `.uvprojx/.uvmpw` 工程文件（等价于识别 `.keil` 工程） | 工程扫描、Target 枚举、构建 |
+| **GCC 工程** | 识别 `CMakeLists.txt` + `CMakePresets.json` / 工具链文件的嵌入式 CMake 工程 | preset 枚举、configure、build、size |
+
+> 当前 `gcc` skill 明确面向 **CMake 型 arm-none-eabi-gcc 工程**，不包含纯 Makefile 工程。
+
+### 按调试工具分类
+
+| 类别 | 主职责 | 输入依赖 |
+|------|--------|----------|
+| **J-Link** | 烧录、寄存器/内存访问、RTT、在线调试、GDB 调试 | 固件路径 + 芯片/接口参数 |
+| **OpenOCD** | 烧录、擦除、复位、Telnet/GDB 调试、Semihosting | 固件路径 + board/interface/target 参数 |
+
+这两套分类是正交的。`Keil -> J-Link`、`Keil -> OpenOCD`、`GCC -> J-Link`、`GCC -> OpenOCD` 都允许成立。构建层负责产出固件路径，调试层负责烧录和在线调试。
+
 | Skill | 用途 | 子命令 |
 |-------|------|--------|
-| **keil** | Keil MDK 工程编译、重建、清理、烧录 | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| **keil** | Keil MDK 工程扫描、Target 枚举、编译、重建、清理，`flash` 作为兼容入口保留 | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| **gcc** | CMake 型 GCC 嵌入式工程扫描、preset 枚举、配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
 | **jlink** | J-Link 烧录、读写内存、寄存器、RTT、在线调试 | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
 | **openocd** | OpenOCD 烧录、擦除、GDB Server、目标复位 | `probe` `flash` `erase` `gdb-server` `reset` |
 | **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
@@ -196,6 +216,7 @@ cp config.example.json config.json
 | Skill | 外部依赖 |
 |-------|----------|
 | keil | Keil MDK (UV4.exe) |
+| gcc | CMake, Ninja/Make, ARM GNU Toolchain |
 | jlink | SEGGER J-Link Software, arm-none-eabi-gdb |
 | openocd | OpenOCD, 调试器驱动 (ST-Link/CMSIS-DAP/DAPLink/FTDI) |
 | serial | `pip install pyserial` + USB 转串口驱动 |
@@ -206,9 +227,17 @@ cp config.example.json config.json
 
 ### keil — Keil MDK 编译构建
 
-扫描 `.uvprojx` / `.uvmpw` 工程文件，枚举 Target，执行增量编译 / 全量重建 / 清理 / 烧录，并解析构建日志提取错误数、警告数、代码尺寸等信息。
+扫描 `.uvprojx` / `.uvmpw` 工程文件，枚举 Target，执行增量编译 / 全量重建 / 清理，并解析构建日志提取错误数、警告数、代码尺寸等信息。构建结果会尽量返回 `flash_file` / `debug_file` 等产物路径，便于后续交给 J-Link 或 OpenOCD。`flash` 子命令保留为兼容入口，不作为推荐的主路径。
 
-**实现方式：** Python 脚本调用 UV4.exe 命令行，解析返回码和构建日志。仅在 build 无错误时允许 flash。
+**实现方式：** Python 脚本调用 UV4.exe 命令行，解析返回码、构建日志和工程输出目录。仅在 build 无错误时允许 flash。
+
+---
+
+### gcc — CMake 型 GCC 嵌入式构建
+
+扫描带 `CMakeLists.txt` 且包含 `CMakePresets.json` 或嵌入式工具链文件的工程，枚举 preset，执行 configure / build / rebuild / clean，并分析 ELF 大小。构建结果返回 `elf_file`，可直接交给 J-Link 或 OpenOCD 做后续调试。
+
+**实现方式：** Python 脚本调用 `cmake --preset` / `cmake --build` / `arm-none-eabi-size`，解析日志、构建目录和 ELF 产物。
 
 ---
 
@@ -307,6 +336,7 @@ cp config.example.json config.json
 | Skill | 状态 |
 |-------|------|
 | keil | ✅ 已完成测试 |
+| gcc | ✅ 已完成测试 |
 | jlink | ✅ 已完成测试 |
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |

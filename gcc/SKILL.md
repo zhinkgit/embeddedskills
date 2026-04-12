@@ -1,7 +1,7 @@
 ---
 name: gcc
 description: >-
-  GCC 嵌入式工程构建工具（CMake + arm-none-eabi-gcc），用于扫描 CMake 嵌入式工程、
+  GCC 嵌入式工程构建工具（CMake + arm-none-eabi-gcc），用于扫描 CMake 型嵌入式工程、
   列出预设、配置、编译、重建、清理和分析 ELF 大小。当用户提到 GCC、arm-none-eabi、
   CMake 嵌入式编译、Ninja 构建、ELF 大小分析、arm-gcc、交叉编译、cmake --build、
   cmake --preset 时自动触发，也兼容 /gcc 显式调用。即使用户只是说"编译一下"或
@@ -12,6 +12,8 @@ argument-hint: "[scan|presets|configure|build|rebuild|clean|size] ..."
 # GCC 嵌入式工程构建
 
 本 skill 提供基于 CMake + arm-none-eabi-gcc 的嵌入式工程发现、preset 枚举、配置生成、增量编译、全量重建、清理和 ELF 大小分析能力。
+
+范围说明：当前仅支持 **CMake 型** GCC 嵌入式工程，不覆盖纯 `Makefile` 工程。
 
 ## 配置
 
@@ -55,7 +57,8 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 4. 发现多个工程或多个 preset 时列出选项让用户选择，绝不自动猜测
 5. `configure/build/rebuild/clean` 按 `operation_mode` 决定是否需要确认
 6. `build` 前自动检测是否已 configure，未配置时提示先执行 configure
-7. `size` 默认分析最近一次构建产物的 .elf 文件
+7. `build/rebuild` 成功后返回 `elf_file`，供 `jlink/openocd` 继续使用
+8. `size` 默认分析最近一次构建产物的 .elf 文件
 
 ## 脚本调用
 
@@ -126,7 +129,8 @@ python <skill-dir>/scripts/gcc_size.py compare \
 ## 核心规则
 
 - 不修改 CMakeLists.txt 或任何 CMake 配置文件
+- 当前 skill 仅覆盖 CMake 型 GCC 工程，不对纯 Makefile 工程做识别和构建
 - 不自动猜测工程路径或 preset，有歧义时必须询问用户
 - `clean` 不在自动流程中隐式执行
 - 构建失败时优先展示首个错误和日志文件路径
-- 结果回显中始终包含工程名、preset 名、构建目录路径
+- 结果回显中始终包含工程名、preset 名、构建目录路径；构建成功时优先回显 `elf_file`

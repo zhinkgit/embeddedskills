@@ -32,7 +32,7 @@ This skill set gives AI assistants the ability to operate hardware toolchains, a
 
 ```mermaid
 flowchart TD
-    A[AI writes/modifies code] --> B[AI invokes Keil to compile]
+    A[AI writes/modifies code] --> B[AI invokes Keil/GCC to compile]
     B --> C{Compile successful?}
     C -->|No| D[AI reads compiler errors]
     D --> A
@@ -53,7 +53,7 @@ flowchart TD
 **Full workflow AI can execute autonomously:**
 
 1. **Write code** → Generate or modify source files based on requirements
-2. **Compile and check** → Invoke Keil, read build errors, and automatically fix code until the build succeeds
+2. **Compile and check** → Invoke Keil / GCC, read build errors, and automatically fix code until the build succeeds
 3. **Flash firmware** → Download firmware to the chip through J-Link / OpenOCD
 4. **Breakpoint debugging** → Set breakpoints, single-step, inspect registers and memory
 5. **Communication debugging** → Read runtime data through serial / CAN / network and judge program behavior
@@ -90,7 +90,7 @@ flowchart LR
 | Item | Traditional AI assistance | AI + Skills |
 |------|---------------------------|-------------|
 | Code writing | ✅ AI-generated | ✅ AI-generated |
-| Compile/build | ❌ Manual operation | ✅ AI invokes Keil autonomously |
+| Compile/build | ❌ Manual operation | ✅ AI invokes Keil / GCC autonomously |
 | Flash/download | ❌ Manual operation | ✅ AI invokes J-Link/OpenOCD autonomously |
 | Debug/verification | ❌ Manual operation | ✅ AI handles breakpoints/registers/memory |
 | Communication debugging | ❌ Manual operation | ✅ AI handles serial/CAN/network |
@@ -107,6 +107,7 @@ graph TB
         direction LR
         subgraph build["Build Layer"]
             keil["keil<br/>Keil MDK Build"]
+            gcc["gcc<br/>CMake GCC Build"]
         end
         subgraph flash["Flash Layer"]
             jlink["jlink<br/>J-Link Debug"]
@@ -127,22 +128,41 @@ graph TB
     build --> flash
     flash --> hw
     comm --> hw
-    AI --> ext
 
     style AI fill:#9C27B0,color:#fff
     style skills fill:#F5F5F5,stroke:#999
     style build fill:#E3F2FD,stroke:#2196F3
     style flash fill:#FFF3E0,stroke:#FF9800
     style comm fill:#E8F5E9,stroke:#4CAF50
-    style ext fill:#F3E5F5,stroke:#9C27B0
     style hw fill:#FFEBEE,stroke:#F44336
 ```
 
 ## Skill List
 
+## Two-Dimensional Classification
+
+### By Project Type
+
+| Category | Detection | Primary responsibility |
+|----------|-----------|------------------------|
+| **Keil project** | Detect `.uvprojx/.uvmpw` project files | Project scan, Target enumeration, build |
+| **GCC project** | Detect embedded CMake projects with `CMakeLists.txt` plus `CMakePresets.json` / toolchain files | Preset enumeration, configure, build, size |
+
+> The current `gcc` skill explicitly targets **CMake-based arm-none-eabi-gcc projects**. It does not cover pure Makefile projects.
+
+### By Debug Tool
+
+| Category | Primary responsibility | Inputs |
+|----------|------------------------|--------|
+| **J-Link** | Flashing, register/memory access, RTT, on-target debugging, GDB debugging | Firmware path + chip/interface parameters |
+| **OpenOCD** | Flashing, erase, reset, Telnet/GDB debugging, semihosting | Firmware path + board/interface/target parameters |
+
+These two classifications are orthogonal. `Keil -> J-Link`, `Keil -> OpenOCD`, `GCC -> J-Link`, and `GCC -> OpenOCD` are all valid combinations. The build layer produces firmware paths, and the debug layer handles flashing and on-target debugging.
+
 | Skill | Purpose | Subcommands |
 |-------|---------|-------------|
-| **keil** | Keil MDK project build, rebuild, clean, and flash | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| **keil** | Keil MDK project scan, Target enumeration, build, rebuild, clean; `flash` is retained as a compatibility entry | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| **gcc** | CMake-based GCC embedded project scan, preset enumeration, configure, build, and size analysis | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
 | **jlink** | J-Link flashing, memory access, registers, RTT, and on-target debugging | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
 | **openocd** | OpenOCD flashing, erase, GDB server, and target reset | `probe` `flash` `erase` `gdb-server` `reset` |
 | **serial** | Serial port scan, live monitor, data send, hex view, and logging | `scan` `monitor` `send` `hex` `log` |
@@ -196,6 +216,7 @@ cp config.example.json config.json
 | Skill | External dependencies |
 |-------|------------------------|
 | keil | Keil MDK (UV4.exe) |
+| gcc | CMake, Ninja/Make, ARM GNU Toolchain |
 | jlink | SEGGER J-Link Software, arm-none-eabi-gdb |
 | openocd | OpenOCD, debugger drivers (ST-Link/CMSIS-DAP/DAPLink/FTDI) |
 | serial | `pip install pyserial` + USB-to-serial driver |
@@ -206,9 +227,17 @@ cp config.example.json config.json
 
 ### keil — Keil MDK Build
 
-Scans `.uvprojx` / `.uvmpw` project files, enumerates Targets, performs incremental build / full rebuild / clean / flash, and parses build logs to extract error count, warning count, code size, and other information.
+Scans `.uvprojx` / `.uvmpw` project files, enumerates Targets, performs incremental build / full rebuild / clean, and parses build logs to extract error count, warning count, code size, and other information. Build results also try to return artifact paths such as `flash_file` and `debug_file` so they can be passed to J-Link or OpenOCD. The `flash` subcommand is kept for compatibility, not as the preferred main path.
 
-**Implementation:** Python scripts invoke the UV4.exe command line, then parse the return code and build logs. Flashing is only allowed when the build completes without errors.
+**Implementation:** Python scripts invoke the UV4.exe command line, then parse the return code, build logs, and output directory metadata. Flashing is only allowed when the build completes without errors.
+
+---
+
+### gcc — CMake-Based GCC Embedded Build
+
+Scans projects that contain `CMakeLists.txt` plus either `CMakePresets.json` or embedded toolchain files, enumerates presets, runs configure / build / rebuild / clean, and analyzes ELF size. Build results return `elf_file`, which can be passed directly to J-Link or OpenOCD for downstream debugging.
+
+**Implementation:** Python scripts invoke `cmake --preset`, `cmake --build`, and `arm-none-eabi-size`, then parse logs, build directories, and ELF artifacts.
 
 ---
 
@@ -307,6 +336,7 @@ Controlled by `operation_mode` in `config.json`:
 | Skill | Status |
 |-------|--------|
 | keil | ✅ Tested and completed |
+| gcc | ✅ Tested and completed |
 | jlink | ✅ Tested and completed |
 | serial | ✅ Tested and completed |
 | net | ✅ Tested and completed |
