@@ -109,6 +109,7 @@ graph TB
             keil["keil<br/>Keil MDK 编译"]
             gcc["gcc<br/>CMake GCC 编译"]
         end
+        workflow["workflow<br/>自动编排"]
         subgraph flash["烧录层"]
             jlink["jlink<br/>J-Link 调试"]
             openocd["openocd<br/>OpenOCD 调试"]
@@ -124,6 +125,9 @@ graph TB
         MCU["🔌 MCU / SoC"]
     end
 
+    AI --> workflow
+    workflow --> build
+    workflow --> flash
     AI --> skills
     build --> flash
     flash --> hw
@@ -154,8 +158,8 @@ graph TB
 
 | 类别 | 主职责 | 输入依赖 |
 |------|--------|----------|
-| **J-Link** | 烧录、寄存器/内存访问、RTT、在线调试、GDB 调试 | 固件路径 + 芯片/接口参数 |
-| **OpenOCD** | 烧录、擦除、复位、Telnet/GDB 调试、Semihosting | 固件路径 + board/interface/target 参数 |
+| **J-Link** | 烧录、寄存器/内存访问、RTT/SWO、在线调试、GDB 调试 | 固件路径 + 芯片/接口参数 |
+| **OpenOCD** | 烧录、擦除、复位、Telnet/GDB 调试、Semihosting/ITM | 固件路径 + board/interface/target 参数 |
 
 这两套分类是正交的。`Keil -> J-Link`、`Keil -> OpenOCD`、`GCC -> J-Link`、`GCC -> OpenOCD` 都允许成立。构建层负责产出固件路径，调试层负责烧录和在线调试。
 
@@ -163,8 +167,9 @@ graph TB
 |-------|------|--------|
 | **keil** | Keil MDK 工程扫描、Target 枚举、编译、重建、清理，`flash` 作为兼容入口保留 | `scan` `targets` `build` `rebuild` `clean` `flash` |
 | **gcc** | CMake 型 GCC 嵌入式工程扫描、preset 枚举、配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
-| **jlink** | J-Link 烧录、读写内存、寄存器、RTT、在线调试 | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
-| **openocd** | OpenOCD 烧录、擦除、GDB Server、目标复位 | `probe` `flash` `erase` `gdb-server` `reset` |
+| **jlink** | J-Link 烧录、读写内存、寄存器、RTT/SWO、在线调试、one-shot GDB | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `swo` `halt` `go` `step` `run-to` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` |
+| **openocd** | OpenOCD 烧录、擦除、底层查询、GDB/Telnet 调试、Semihosting/ITM | `probe` `flash` `erase` `reset` `reset-init` `targets` `flash-banks` `adapter-info` `raw` `gdb server` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` `semihosting` `itm` |
+| **workflow** | 发现工程、选择后端、串联 workspace 状态、聚合结果 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
 | **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
 | **can** | CAN/CAN-FD 接口扫描、监控、发帧、DBC 解码 | `scan` `monitor` `send` `log` `decode` `stats` |
 | **net** | 抓包、pcap 分析、连通性测试、端口扫描 | `iface` `capture` `analyze` `ping` `scan` `stats` |
@@ -247,20 +252,23 @@ cp config.example.json config.json
 
 **轻量调试：** 暂停 (`halt`) / 恢复 (`go`) / 单步 (`step`) / 断点运行 (`run-to`)
 
-**GDB 源码级调试：** 任意 GDB 命令 (`gdb run`)、调用栈 (`gdb backtrace`)、局部变量 (`gdb locals`)
+**GDB 源码级调试：** 支持 `backtrace / locals / break / continue / next / step / finish / until / frame / print / watch / disassemble / threads / crash-report`
+
+**观测通道：** RTT (`rtt`) 与可插拔 SWO 包装层 (`swo`)
 
 **实现方式：**
 - `jlink_exec.py` — 生成 `.jlink` 命令脚本交由 JLink.exe 执行
 - `jlink_rtt.py` — 启动 JLinkGDBServerCL + JLinkRTTClient 读取 RTT 输出
-- `jlink_gdb.py` — 启动 GDB Server 后用 arm-none-eabi-gdb 执行命令序列
+- `jlink_gdb.py` — 启动 GDB Server 后用 arm-none-eabi-gdb 执行统一 one-shot 调试子命令
+- `jlink_swo.py` — 对外部 SWO viewer 做统一事件流包装
 
 ---
 
 ### openocd — OpenOCD 调试烧录
 
-探针探测 (`probe`)、固件烧录 (`flash`)、Flash 擦除 (`erase`)、GDB Server 启动 (`gdb-server`)、目标复位 (`reset`)。
+探针探测 (`probe`)、固件烧录 (`flash`)、Flash 擦除 (`erase`)、目标复位 (`reset` / `reset-init`)、底层查询 (`targets` / `flash-banks` / `adapter-info` / `raw`)、统一 GDB 子命令、Semihosting 与 ITM 观测。
 
-**实现方式：** Python 脚本拼接 OpenOCD 命令行参数并执行，支持 board 配置优先于 interface + target 组合。GDB Server 模式保持进程运行并返回端口信息。
+**实现方式：** Python 脚本拼接 OpenOCD 命令行参数并执行，支持 board 配置优先于 interface + target 组合。GDB 调试使用统一 one-shot 命令集；观测层新增 `openocd_itm.py` 以复用官方 TPIU/ITM 命令。
 
 **支持的调试器：** ST-Link V2/V3, CMSIS-DAP, DAPLink, J-Link, FTDI
 
@@ -290,6 +298,16 @@ cp config.example.json config.json
 
 ---
 
+### workflow — 自动编排
+
+发现当前 workspace 中的 Keil / GCC 工程，选择 build/flash/debug/observe 后端，并通过 `.embeddedskills/state.json` 串联最近一次构建、烧录、调试、观测结果。
+
+**实现方式：**
+- `workflow_plan.py` — 发现工程、候选后端和最近状态
+- `workflow_run.py` — 薄编排入口，调用现有 skill 脚本并聚合结果
+
+---
+
 ## 通用架构
 
 ### 目录结构
@@ -309,10 +327,30 @@ cp config.example.json config.json
 ### 统一输出格式
 
 ```json
-{ "status": "ok|error", "action": "...", "summary": "...", "details": {...} }
+{
+  "status": "ok|error",
+  "action": "...",
+  "summary": "简短摘要",
+  "details": {},
+  "context": {},
+  "artifacts": {},
+  "metrics": {},
+  "state": {},
+  "next_actions": [],
+  "timing": {}
+}
 ```
 
-流式命令使用 JSON Lines，摘要信息输出到 stderr。
+兼容层仍保留 `{status, action, summary, details}` 四个基础字段。流式命令使用 JSON Lines，并统一带上 `source / channel_type / stream_type`。
+
+### Workspace 共享状态
+
+运行期状态存放在当前 workspace 的 `.embeddedskills/state.json`，而不是用户全局目录。当前至少会记录：
+
+- `last_build`
+- `last_flash`
+- `last_debug`
+- `last_observe`
 
 ### 执行模式
 
@@ -338,6 +376,7 @@ cp config.example.json config.json
 | keil | ✅ 已完成测试 |
 | gcc | ✅ 已完成测试 |
 | jlink | ✅ 已完成测试 |
+| workflow | 🔧 待测试 |
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |
 | openocd | 🔧 待测试 |

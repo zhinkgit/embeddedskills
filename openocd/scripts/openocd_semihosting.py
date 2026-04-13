@@ -1,31 +1,62 @@
-"""OpenOCD Semihosting 输出捕获
+"""OpenOCD Semihosting 输出捕获。"""
 
-工作流程：
-1. 启动 OpenOCD 作为后台 Server
-2. 连接 Telnet 端口
-3. halt -> arm semihosting enable -> resume
-4. 持续读取 OpenOCD stderr 中的 semihosting 输出
-5. Ctrl+C 退出时发送 halt + arm semihosting disable + shutdown
-"""
+from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import signal
 import socket
 import subprocess
 import sys
 import time
-from datetime import datetime
+from pathlib import Path
 
 
-# ── OpenOCD 服务器（复用 openocd_gdb.py 模式） ──────────────────
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: str = "",
-                      search: str = "", adapter_speed: str = "", transport: str = "",
-                      gdb_port: int = 3333, telnet_port: int = 4444) -> list:
-    """构建 OpenOCD 命令行"""
+from openocd_runtime import (  # noqa: E402
+    emit_stream_record,
+    default_config_path,
+    get_state_entry,
+    load_json_file,
+    load_workspace_state,
+    make_result,
+    make_timing,
+    normalize_path,
+    now_iso,
+    output_json,
+    parameter_context,
+    resolve_param,
+    update_state_entry,
+    workspace_root,
+)
+
+
+LOG_PREFIXES = re.compile(r"^(Info|Warn|Error|Debug)\s*:", re.IGNORECASE)
+STATUS_PATTERNS = [
+    "Listening on port",
+    "halted due to",
+    "target state:",
+    "shutdown command invoked",
+    "GDB",
+    "accepting",
+    "dropped",
+]
+
+
+def build_openocd_cmd(
+    exe: str,
+    board: str = "",
+    interface: str = "",
+    target: str = "",
+    search: str = "",
+    adapter_speed: str = "",
+    transport: str = "",
+    gdb_port: int = 3333,
+    telnet_port: int = 4444,
+) -> list[str]:
     cmd = [exe]
     if search:
         cmd.extend(["-s", search])
@@ -45,8 +76,7 @@ def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: st
     return cmd
 
 
-def start_openocd_server(cmd: list) -> subprocess.Popen:
-    """启动 OpenOCD 进程"""
+def start_openocd_server(cmd: list[str]) -> subprocess.Popen:
     return subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -58,44 +88,35 @@ def start_openocd_server(cmd: list) -> subprocess.Popen:
     )
 
 
-def wait_server_ready(proc: subprocess.Popen, telnet_port: int, timeout: int = 15) -> tuple:
-    """等待 OpenOCD 就绪"""
-    start = time.time()
-    errors = []
+def wait_server_ready(proc: subprocess.Popen, telnet_port: int, timeout: int = 15) -> tuple[bool, list[str]]:
+    started = time.time()
+    errors: list[str] = []
     ready = False
-    while time.time() - start < timeout:
+    while time.time() - started < timeout:
         if proc.poll() is not None:
             remaining = proc.stderr.read()
-            for line in remaining.splitlines():
-                if "Error:" in line:
-                    errors.append(line.strip())
+            errors.extend([line.strip() for line in remaining.splitlines() if "Error:" in line])
             return False, errors
         line = proc.stderr.readline()
         if not line:
             time.sleep(0.1)
             continue
-        line = line.strip()
-        if "Error:" in line:
-            errors.append(line)
-        if f"Listening on port {telnet_port}" in line or "listening on" in line.lower():
+        stripped = line.strip()
+        if "Error:" in stripped:
+            errors.append(stripped)
+        if f"Listening on port {telnet_port}" in stripped or "listening on" in stripped.lower():
             ready = True
             break
-
     if not ready:
         return False, errors
-
-    critical_keywords = [
-        "open failed", "init mode failed", "no device found",
-        "cannot connect", "error connecting dp", "examination failed",
-    ]
-    critical_errors = [e for e in errors if any(k in e.lower() for k in critical_keywords)]
+    critical = ["open failed", "init mode failed", "no device found", "cannot connect", "error connecting dp", "examination failed"]
+    critical_errors = [item for item in errors if any(keyword in item.lower() for keyword in critical)]
     if critical_errors:
         return False, critical_errors
     return True, errors
 
 
-def cleanup_proc(proc: subprocess.Popen):
-    """清理 OpenOCD 进程"""
+def cleanup_proc(proc: subprocess.Popen | None) -> None:
     if proc and proc.poll() is None:
         try:
             if sys.platform == "win32":
@@ -107,56 +128,17 @@ def cleanup_proc(proc: subprocess.Popen):
             proc.kill()
 
 
-# ── Telnet 简易连接（仅用于发送启用命令） ─────────────────────
-
-def telnet_send(host: str, port: int, command: str, timeout: float = 5.0) -> str:
-    """连接 Telnet 端口，发送单条命令，返回响应"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        sock.connect((host, port))
-        # 读取初始提示符
-        _read_until_prompt(sock)
-        # 发送命令
-        sock.sendall((command + "\n").encode("utf-8"))
-        response = _read_until_prompt(sock)
-        return response
-    finally:
-        sock.close()
-
-
-def telnet_send_multi(host: str, port: int, commands: list, timeout: float = 5.0) -> list:
-    """连接 Telnet 端口，发送多条命令，返回响应列表"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    responses = []
-    try:
-        sock.connect((host, port))
-        _read_until_prompt(sock)
-        for cmd in commands:
-            sock.sendall((cmd + "\n").encode("utf-8"))
-            response = _read_until_prompt(sock)
-            responses.append(response)
-        return responses
-    finally:
-        sock.close()
-
-
 def _read_until_prompt(sock: socket.socket) -> str:
-    """读取直到 '> ' 提示符"""
     buf = b""
     while True:
         decoded = buf.decode("utf-8", errors="replace")
         if decoded.endswith("> ") or "\n> " in decoded or "\r> " in decoded:
-            # 去掉提示符
             prompt_pos = decoded.rfind("\n> ")
             if prompt_pos == -1:
                 prompt_pos = decoded.rfind("\r> ")
             if prompt_pos == -1 and decoded.endswith("> "):
                 prompt_pos = len(decoded) - 2
-            if prompt_pos >= 0:
-                return decoded[:prompt_pos].strip()
-            return decoded.strip()
+            return decoded[:prompt_pos].strip() if prompt_pos >= 0 else decoded.strip()
         try:
             chunk = sock.recv(4096)
             if not chunk:
@@ -166,176 +148,300 @@ def _read_until_prompt(sock: socket.socket) -> str:
             return buf.decode("utf-8", errors="replace").strip()
 
 
-# ── Semihosting 输出过滤 ──────────────────────────────────────
-
-# OpenOCD 自身日志行的前缀
-LOG_PREFIXES = re.compile(r"^(Info|Warn|Error|Debug)\s*:", re.IGNORECASE)
-# OpenOCD 状态行
-STATUS_PATTERNS = [
-    "Listening on port",
-    "halted due to",
-    "target state:",
-    "shutdown command invoked",
-    "GDB",
-    "accepting",
-    "dropped",
-]
+def telnet_send_multi(host: str, port: int, commands: list[str], timeout: float = 5.0) -> list[str]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    responses: list[str] = []
+    try:
+        sock.connect((host, port))
+        _read_until_prompt(sock)
+        for command in commands:
+            sock.sendall((command + "\n").encode("utf-8"))
+            responses.append(_read_until_prompt(sock))
+        return responses
+    finally:
+        sock.close()
 
 
 def is_semihosting_line(line: str) -> bool:
-    """判断是否为 semihosting 输出（而非 OpenOCD 自身日志）"""
     stripped = line.strip()
     if not stripped:
         return False
     if LOG_PREFIXES.match(stripped):
         return False
-    for pat in STATUS_PATTERNS:
-        if pat in stripped:
-            return False
-    return True
+    return not any(item in stripped for item in STATUS_PATTERNS)
 
 
-def output_semihosting_line(text: str, as_json: bool = False):
-    """输出一行 semihosting 数据"""
-    if as_json:
-        record = {
-            "timestamp": datetime.now().isoformat(),
-            "channel": 0,
-            "text": text.rstrip(),
-        }
-        print(json.dumps(record, ensure_ascii=False), flush=True)
-    else:
-        print(text, end="", flush=True)
+def _state_lookup(state: dict) -> dict:
+    last_debug = get_state_entry(state, "last_debug")
+    last_flash = get_state_entry(state, "last_flash")
+    return {
+        "board": last_debug.get("board") or last_flash.get("board"),
+        "interface": last_debug.get("interface") or last_flash.get("interface"),
+        "target": last_debug.get("target") or last_flash.get("target"),
+        "search": last_debug.get("search"),
+        "adapter_speed": last_debug.get("adapter_speed") or last_flash.get("adapter_speed"),
+        "transport": last_debug.get("transport") or last_flash.get("transport"),
+        "gdb_port": last_debug.get("gdb_port"),
+        "telnet_port": last_debug.get("telnet_port"),
+    }
 
 
-# ── 主逻辑 ────────────────────────────────────────────────────
-
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2), flush=True)
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="OpenOCD Semihosting 输出捕获")
-    parser.add_argument("--exe", default="openocd", help="openocd 路径")
-    parser.add_argument("--board", default="", help="board 配置文件")
-    parser.add_argument("--interface", default="", help="interface 配置文件")
-    parser.add_argument("--target", default="", help="target 配置文件")
-    parser.add_argument("--search", default="", help="额外配置脚本搜索目录")
-    parser.add_argument("--adapter-speed", default="", help="调试速率 kHz")
-    parser.add_argument("--transport", default="", choices=["", "swd", "jtag"], help="传输协议")
-    parser.add_argument("--gdb-port", type=int, default=3333, help="GDB 端口")
-    parser.add_argument("--telnet-port", type=int, default=4444, help="Telnet 端口")
+    parser.add_argument("--exe", default=None, help="openocd 路径")
+    parser.add_argument("--board", default=None, help="board 配置文件")
+    parser.add_argument("--interface", default=None, help="interface 配置文件")
+    parser.add_argument("--target", default=None, help="target 配置文件")
+    parser.add_argument("--search", default=None, help="额外配置脚本搜索目录")
+    parser.add_argument("--adapter-speed", default=None, help="调试速率 kHz")
+    parser.add_argument("--transport", default=None, choices=["", "swd", "jtag"], help="传输协议")
+    parser.add_argument("--gdb-port", type=int, default=None, help="GDB 端口")
+    parser.add_argument("--telnet-port", type=int, default=None, help="Telnet 端口")
     parser.add_argument("--timeout", type=int, default=0, help="捕获时长秒数，0=持续到 Ctrl+C")
+    parser.add_argument("--config", default=None, help="skill config.json 路径")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
-
     args = parser.parse_args()
 
-    # 参数校验
-    if not args.board and not args.interface and not args.target:
-        result = {
-            "status": "error", "action": "semihosting",
-            "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target"},
-        }
+    started_at = now_iso()
+    started_ts = time.time()
+    workspace = workspace_root(args.workspace)
+    config_path = normalize_path(args.config or str(default_config_path(__file__)))
+    config = load_json_file(config_path)
+    state = load_workspace_state(str(workspace))
+    state_lookup = _state_lookup(state)
+
+    parameter_sources: dict[str, str] = {}
+    try:
+        exe, parameter_sources["exe"] = resolve_param("exe", args.exe, config=config, config_keys=["exe"], required=True)
+        board, parameter_sources["board"] = resolve_param(
+            "board",
+            args.board,
+            config=config,
+            config_keys=["default_board"],
+            state_record=state_lookup,
+            state_keys=["board"],
+        )
+        interface, parameter_sources["interface"] = resolve_param(
+            "interface",
+            args.interface,
+            config=config,
+            config_keys=["default_interface"],
+            state_record=state_lookup,
+            state_keys=["interface"],
+        )
+        target, parameter_sources["target"] = resolve_param(
+            "target",
+            args.target,
+            config=config,
+            config_keys=["default_target"],
+            state_record=state_lookup,
+            state_keys=["target"],
+        )
+        search, parameter_sources["search"] = resolve_param(
+            "search",
+            args.search,
+            config=config,
+            config_keys=["scripts_dir"],
+            state_record=state_lookup,
+            state_keys=["search"],
+        )
+        adapter_speed, parameter_sources["adapter_speed"] = resolve_param(
+            "adapter_speed",
+            args.adapter_speed,
+            config=config,
+            config_keys=["adapter_speed"],
+            state_record=state_lookup,
+            state_keys=["adapter_speed"],
+        )
+        transport, parameter_sources["transport"] = resolve_param(
+            "transport",
+            args.transport,
+            config=config,
+            config_keys=["transport"],
+            state_record=state_lookup,
+            state_keys=["transport"],
+        )
+        gdb_port, parameter_sources["gdb_port"] = resolve_param(
+            "gdb_port",
+            args.gdb_port,
+            config=config,
+            config_keys=["gdb_port"],
+            state_record=state_lookup,
+            state_keys=["gdb_port"],
+        )
+        telnet_port, parameter_sources["telnet_port"] = resolve_param(
+            "telnet_port",
+            args.telnet_port,
+            config=config,
+            config_keys=["telnet_port"],
+            state_record=state_lookup,
+            state_keys=["telnet_port"],
+        )
+    except ValueError as exc:
+        result = make_result(
+            status="error",
+            action="semihosting",
+            summary=str(exc),
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "missing_param", "message": str(exc)},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
+            print(f"错误: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 启动 OpenOCD
+    if not board and not interface and not target:
+        message = "必须提供 --board 或 --interface + --target"
+        result = make_result(
+            status="error",
+            action="semihosting",
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "missing_config", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        sys.exit(1)
+
     cmd = build_openocd_cmd(
-        exe=args.exe, board=args.board, interface=args.interface, target=args.target,
-        search=args.search, adapter_speed=args.adapter_speed, transport=args.transport,
-        gdb_port=args.gdb_port, telnet_port=args.telnet_port,
+        exe=exe,
+        board=board or "",
+        interface=interface or "",
+        target=target or "",
+        search=search or "",
+        adapter_speed=str(adapter_speed or ""),
+        transport=transport or "",
+        gdb_port=int(gdb_port or 3333),
+        telnet_port=int(telnet_port or 4444),
     )
 
-    proc = None
+    proc: subprocess.Popen | None = None
     try:
         proc = start_openocd_server(cmd)
-        ready, errors = wait_server_ready(proc, args.telnet_port)
-
+        ready, errors = wait_server_ready(proc, int(telnet_port or 4444))
         if not ready:
-            error_msg = "; ".join(errors) if errors else "OpenOCD 启动失败或超时"
-            result = {
-                "status": "error", "action": "semihosting",
-                "error": {"code": "server_failed", "message": error_msg},
-            }
+            message = "; ".join(errors) if errors else "OpenOCD 启动失败或超时"
+            result = make_result(
+                status="error",
+                action="semihosting",
+                summary="Semihosting 服务启动失败",
+                details={"errors": errors},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "server_failed", "message": message},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
             if args.as_json:
                 output_json(result)
             else:
-                print(f"错误: {error_msg}", file=sys.stderr, flush=True)
+                print(f"错误: {message}", file=sys.stderr)
             sys.exit(1)
 
-        # 通过 Telnet 启用 semihosting
         try:
-            responses = telnet_send_multi(
-                "localhost", args.telnet_port,
-                ["halt", "arm semihosting enable", "resume"],
+            telnet_send_multi("localhost", int(telnet_port or 4444), ["halt", "arm semihosting enable", "resume"])
+        except (ConnectionError, OSError) as exc:
+            result = make_result(
+                status="error",
+                action="semihosting",
+                summary="Telnet 连接失败",
+                details={},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "telnet_failed", "message": f"Telnet 连接失败: {exc}"},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
             )
-        except (ConnectionError, OSError) as e:
-            result = {
-                "status": "error", "action": "semihosting",
-                "error": {"code": "telnet_failed", "message": f"Telnet 连接失败: {e}"},
-            }
             if args.as_json:
                 output_json(result)
             else:
-                print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
+                print(f"错误: {result['error']['message']}", file=sys.stderr)
             sys.exit(1)
+
+        update_state_entry(
+            "last_observe",
+            {
+                "provider": "openocd",
+                "action": "semihosting",
+                "board": board or "",
+                "interface": interface or "",
+                "target": target or "",
+                "search": search or "",
+                "adapter_speed": adapter_speed or "",
+                "transport": transport or "",
+                "channel_type": "semihosting",
+                "stream_type": "text",
+                "source": "openocd",
+            },
+            str(workspace),
+        )
 
         if not args.as_json:
             print("Semihosting 已启用，等待输出（Ctrl+C 退出）:", file=sys.stderr, flush=True)
             print("-" * 40, file=sys.stderr, flush=True)
 
-        # 持续读取 OpenOCD stderr 中的 semihosting 输出
-        start_time = time.time()
+        monitor_started = time.time()
         while True:
-            if args.timeout > 0 and (time.time() - start_time) >= args.timeout:
+            if args.timeout > 0 and (time.time() - monitor_started) >= args.timeout:
                 break
 
             if proc.poll() is not None:
-                # OpenOCD 进程已退出，读取剩余输出
                 remaining = proc.stderr.read()
                 for line in remaining.splitlines(keepends=True):
                     if is_semihosting_line(line):
-                        output_semihosting_line(line, args.as_json)
+                        emit_stream_record(
+                            source="openocd",
+                            channel_type="semihosting",
+                            text=line,
+                            as_json=args.as_json,
+                            stream_type="text",
+                        )
                 break
 
             line = proc.stderr.readline()
             if not line:
-                time.sleep(0.01)
+                time.sleep(0.02)
                 continue
-
             if is_semihosting_line(line):
-                output_semihosting_line(line, args.as_json)
+                emit_stream_record(
+                    source="openocd",
+                    channel_type="semihosting",
+                    text=line,
+                    as_json=args.as_json,
+                    stream_type="text",
+                )
 
     except FileNotFoundError:
-        result = {
-            "status": "error", "action": "semihosting",
-            "error": {"code": "exe_not_found", "message": f"openocd 不存在或不在 PATH 中: {args.exe}"},
-        }
+        message = f"openocd 不存在或不在 PATH 中: {exe}"
+        result = make_result(
+            status="error",
+            action="semihosting",
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "exe_not_found", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
+            print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         if not args.as_json:
             print("\n已停止 semihosting 捕获", file=sys.stderr, flush=True)
     finally:
-        # 尝试通过 Telnet 禁用 semihosting
         if proc and proc.poll() is None:
             try:
-                telnet_send_multi(
-                    "localhost", args.telnet_port,
-                    ["halt", "arm semihosting disable", "shutdown"],
-                    timeout=2.0,
-                )
+                telnet_send_multi("localhost", int(telnet_port or 4444), ["halt", "arm semihosting disable", "shutdown"], timeout=2.0)
             except (ConnectionError, OSError):
                 pass
-        if proc:
-            cleanup_proc(proc)
+        cleanup_proc(proc)
 
 
 if __name__ == "__main__":

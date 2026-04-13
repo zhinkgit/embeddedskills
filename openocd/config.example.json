@@ -4,8 +4,15 @@
   "default_board": "",
   "default_interface": "interface/stlink.cfg",
   "default_target": "target/stm32f4x.cfg",
+  "default_file": "",
+  "adapter_speed": "",
+  "transport": "",
   "gdb_port": 3333,
   "telnet_port": 4444,
   "gdb_exe": "",
+  "default_elf": "",
+  "tpiu_name": "",
+  "traceclk": "",
+  "pin_freq": "",
   "operation_mode": 1
 }

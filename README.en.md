@@ -109,6 +109,7 @@ graph TB
             keil["keil<br/>Keil MDK Build"]
             gcc["gcc<br/>CMake GCC Build"]
         end
+        workflow["workflow<br/>Orchestration"]
         subgraph flash["Flash Layer"]
             jlink["jlink<br/>J-Link Debug"]
             openocd["openocd<br/>OpenOCD Debug"]
@@ -124,6 +125,9 @@ graph TB
         MCU["🔌 MCU / SoC"]
     end
 
+    AI --> workflow
+    workflow --> build
+    workflow --> flash
     AI --> skills
     build --> flash
     flash --> hw
@@ -154,8 +158,8 @@ graph TB
 
 | Category | Primary responsibility | Inputs |
 |----------|------------------------|--------|
-| **J-Link** | Flashing, register/memory access, RTT, on-target debugging, GDB debugging | Firmware path + chip/interface parameters |
-| **OpenOCD** | Flashing, erase, reset, Telnet/GDB debugging, semihosting | Firmware path + board/interface/target parameters |
+| **J-Link** | Flashing, register/memory access, RTT/SWO, on-target debugging, GDB debugging | Firmware path + chip/interface parameters |
+| **OpenOCD** | Flashing, erase, reset, Telnet/GDB debugging, semihosting/ITM | Firmware path + board/interface/target parameters |
 
 These two classifications are orthogonal. `Keil -> J-Link`, `Keil -> OpenOCD`, `GCC -> J-Link`, and `GCC -> OpenOCD` are all valid combinations. The build layer produces firmware paths, and the debug layer handles flashing and on-target debugging.
 
@@ -163,8 +167,9 @@ These two classifications are orthogonal. `Keil -> J-Link`, `Keil -> OpenOCD`, `
 |-------|---------|-------------|
 | **keil** | Keil MDK project scan, Target enumeration, build, rebuild, clean; `flash` is retained as a compatibility entry | `scan` `targets` `build` `rebuild` `clean` `flash` |
 | **gcc** | CMake-based GCC embedded project scan, preset enumeration, configure, build, and size analysis | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
-| **jlink** | J-Link flashing, memory access, registers, RTT, and on-target debugging | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `halt` `go` `step` `run-to` `gdb run` `gdb backtrace` `gdb locals` |
-| **openocd** | OpenOCD flashing, erase, GDB server, and target reset | `probe` `flash` `erase` `gdb-server` `reset` |
+| **jlink** | J-Link flashing, memory access, registers, RTT/SWO, on-target debugging, and one-shot GDB | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `swo` `halt` `go` `step` `run-to` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` |
+| **openocd** | OpenOCD flashing, erase, low-level queries, GDB/Telnet debugging, semihosting/ITM | `probe` `flash` `erase` `reset` `reset-init` `targets` `flash-banks` `adapter-info` `raw` `gdb server` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` `semihosting` `itm` |
+| **workflow** | Discover projects, select backends, chain workspace state, aggregate results | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
 | **serial** | Serial port scan, live monitor, data send, hex view, and logging | `scan` `monitor` `send` `hex` `log` |
 | **can** | CAN/CAN-FD interface scan, monitoring, frame sending, and DBC decoding | `scan` `monitor` `send` `log` `decode` `stats` |
 | **net** | Packet capture, pcap analysis, connectivity testing, and port scan | `iface` `capture` `analyze` `ping` `scan` `stats` |
@@ -247,20 +252,23 @@ Scans projects that contain `CMakeLists.txt` plus either `CMakePresets.json` or 
 
 **Lightweight debugging:** halt (`halt`) / resume (`go`) / single-step (`step`) / run to breakpoint (`run-to`)
 
-**Source-level debugging through GDB:** arbitrary GDB commands (`gdb run`), backtrace (`gdb backtrace`), local variables (`gdb locals`)
+**Source-level debugging through GDB:** unified one-shot commands for `backtrace / locals / break / continue / next / step / finish / until / frame / print / watch / disassemble / threads / crash-report`
+
+**Observe channels:** RTT (`rtt`) and pluggable SWO wrapper (`swo`)
 
 **Implementation:**
 - `jlink_exec.py` — generates a `.jlink` command script and executes it with JLink.exe
 - `jlink_rtt.py` — starts JLinkGDBServerCL + JLinkRTTClient to read RTT output
-- `jlink_gdb.py` — starts the GDB server and uses arm-none-eabi-gdb to run command sequences
+- `jlink_gdb.py` — starts the GDB server and runs unified one-shot debug subcommands
+- `jlink_swo.py` — wraps an external SWO viewer into the common event stream protocol
 
 ---
 
 ### openocd — OpenOCD Debugging and Flashing
 
-Probe detection (`probe`), firmware flashing (`flash`), flash erase (`erase`), GDB server startup (`gdb-server`), and target reset (`reset`).
+Probe detection (`probe`), firmware flashing (`flash`), flash erase (`erase`), target reset (`reset` / `reset-init`), low-level queries (`targets` / `flash-banks` / `adapter-info` / `raw`), unified GDB subcommands, and semihosting/ITM observation.
 
-**Implementation:** Python scripts assemble and execute OpenOCD command-line arguments. Board configuration takes priority over interface + target combinations. In GDB server mode, the process stays alive and returns port information.
+**Implementation:** Python scripts assemble and execute OpenOCD command-line arguments. Board configuration takes priority over interface + target combinations. GDB debugging uses a unified one-shot command surface, and `openocd_itm.py` reuses official TPIU/ITM commands.
 
 **Supported debuggers:** ST-Link V2/V3, CMSIS-DAP, DAPLink, J-Link, FTDI
 
@@ -290,6 +298,16 @@ Interface discovery (`iface`), live packet capture (`capture`), offline pcap ana
 
 ---
 
+### workflow — Orchestration
+
+Discovers Keil / GCC projects in the current workspace, selects build/flash/debug/observe backends, and chains the latest results through `.embeddedskills/state.json`.
+
+**Implementation:**
+- `workflow_plan.py` — discovers projects, backend candidates, and recent state
+- `workflow_run.py` — thin orchestration entry that calls existing skill scripts and aggregates results
+
+---
+
 ## Common Architecture
 
 ### Directory Structure
@@ -309,10 +327,30 @@ Each skill uses the following directory structure:
 ### Unified Output Format
 
 ```json
-{ "status": "ok|error", "action": "...", "summary": "...", "details": {...} }
+{
+  "status": "ok|error",
+  "action": "...",
+  "summary": "short summary",
+  "details": {},
+  "context": {},
+  "artifacts": {},
+  "metrics": {},
+  "state": {},
+  "next_actions": [],
+  "timing": {}
+}
 ```
 
-Streaming commands use JSON Lines, and summary information is written to stderr.
+The compatibility layer still preserves the base `{status, action, summary, details}` fields. Streaming commands use JSON Lines and include `source / channel_type / stream_type`.
+
+### Workspace Shared State
+
+Runtime state is stored in `.embeddedskills/state.json` inside the current workspace, not in a user-global directory. It currently records at least:
+
+- `last_build`
+- `last_flash`
+- `last_debug`
+- `last_observe`
 
 ### Operation Modes
 
@@ -338,6 +376,7 @@ Controlled by `operation_mode` in `config.json`:
 | keil | ✅ Tested and completed |
 | gcc | ✅ Tested and completed |
 | jlink | ✅ Tested and completed |
+| workflow | 🔧 Pending testing |
 | serial | ✅ Tested and completed |
 | net | ✅ Tested and completed |
 | openocd | 🔧 Pending testing |

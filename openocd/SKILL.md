@@ -27,9 +27,16 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
   "default_board": "",
   "default_interface": "interface/stlink.cfg",
   "default_target": "target/stm32f4x.cfg",
+  "default_file": "",
+  "adapter_speed": "",
+  "transport": "",
   "gdb_port": 3333,
   "telnet_port": 4444,
   "gdb_exe": "",
+  "default_elf": "",
+  "tpiu_name": "",
+  "traceclk": "",
+  "pin_freq": "",
   "operation_mode": 1
 }
 ```
@@ -39,9 +46,12 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 - `default_board`：默认 board 配置（如 `board/stm32f4discovery.cfg`），优先级高于 interface+target
 - `default_interface`：默认 interface 配置（如 `interface/stlink.cfg`）
 - `default_target`：默认 target 配置（如 `target/stm32f4x.cfg`）
+- `default_file` / `default_elf`：默认固件/ELF；为空时优先读取 `.embeddedskills/state.json`
+- `adapter_speed` / `transport`：默认调试链路参数
 - `gdb_port`：GDB Server 端口，默认 3333
 - `telnet_port`：Telnet 端口，默认 4444
 - `gdb_exe`：arm-none-eabi-gdb 路径，GDB 调试子命令（run/backtrace/locals）需要
+- `tpiu_name` / `traceclk` / `pin_freq`：ITM/SWO 观测所需的 TPIU 参数
 - `operation_mode`：`1` 直接执行 / `2` 输出风险摘要但不阻塞 / `3` 执行前确认
 
 ## 子命令
@@ -53,16 +63,18 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 | `probe` | 验证 board 或 interface+target 组合，探测目标连通性 | 低 |
 | `flash` | 烧录固件（.elf / .hex / .bin） | 高 |
 | `erase` | 擦除目标 Flash | 高 |
-| `reset` | 复位目标芯片 | 高 |
+| `reset` / `reset-init` | 复位目标芯片 | 高 |
+| `targets` / `flash-banks` / `adapter-info` | 查询底层 target / flash / adapter 信息 | 低 |
+| `raw` | 执行受控 OpenOCD 原生命令 | 高 |
 
 ### GDB Server
 
 | 子命令 | 用途 | 风险 |
 |--------|------|------|
 | `gdb-server` | 启动 GDB Server，保持运行等待 GDB 连接 | 低 |
-| `gdb run` | 启动 GDB Server + 执行自定义 GDB 命令序列 + 关闭 | 低 |
-| `gdb backtrace` | 快捷获取当前调用栈 | 低 |
-| `gdb locals` | 快捷查看当前帧局部变量 | 低 |
+| `gdb backtrace/locals` | 快捷获取调用栈和局部变量 | 低 |
+| `gdb break/continue/next/step/finish/until` | one-shot 执行流控制 | 低 |
+| `gdb frame/print/watch/disassemble/threads/crash-report` | one-shot 源码级诊断 | 低 |
 
 ### Telnet 在线调试
 
@@ -83,6 +95,7 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 | 子命令 | 用途 | 风险 |
 |--------|------|------|
 | `semihosting` | 启用 ARM Semihosting 并捕获目标 printf 输出 | 低 |
+| `itm` | 基于 TPIU/ITM 读取 SWO/ITM 观测数据 | 低 |
 
 ## 执行流程
 
@@ -222,7 +235,7 @@ semihosting
 
 ## 输出格式
 
-所有脚本以 JSON 格式返回，包含 `status`（ok/error）、`action`、`summary`、`details` 字段。
+所有脚本以 JSON 格式返回，基础字段为 `status`（ok/error）、`action`、`summary`、`details`，并可能附带 `context`、`artifacts`、`metrics`、`state`、`next_actions`、`timing`。流式观测命令使用 JSON Lines，并统一输出 `source`、`channel_type`、`stream_type`。
 
 成功示例：
 ```json
@@ -270,6 +283,7 @@ GDB 调用栈示例：
 
 - 不自动猜测 `board`、`interface`、`target` 的组合，缺失时必须询问用户
 - 已知 `board` 时优先使用 board 配置，不再需要 interface+target
+- 参数解析优先级为：CLI 显式参数 > `config.json` > `.embeddedskills/state.json` > 报错
 - `.bin` 文件必须显式提供烧录地址，缺失时报错
 - STM32F4 等已映射 target 在 `erase --mode auto` 下会先 `reset halt`，再优先使用 mass erase
 - `erase --mode mass` 在未命中映射时直接返回 `mass_erase_unsupported`，避免误以为已做整片擦除

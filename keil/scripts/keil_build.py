@@ -1,16 +1,40 @@
-"""Keil MDK 构建 / 重建 / 清理 / 烧录"""
+"""Keil MDK 构建 / 重建 / 清理 / 烧录。"""
+
+from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-# UV4.exe ERRORLEVEL 映射
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from keil_runtime import (  # noqa: E402
+    build_artifacts,
+    default_config_path,
+    get_state_entry,
+    is_missing,
+    load_json_file,
+    load_workspace_state,
+    make_result,
+    make_timing,
+    normalize_path,
+    now_iso,
+    output_json,
+    parameter_context,
+    resolve_param,
+    update_state_entry,
+    workspace_root,
+)
+
+
 ERRORLEVEL_MAP = {
     0: ("ok", "无错误或警告"),
     1: ("ok", "有警告"),
@@ -32,34 +56,31 @@ ACTION_FLAG = {
 
 
 def parse_log(log_path: str) -> dict:
-    """解析构建日志，提取 errors/warnings/Program Size"""
-    summary = {"errors": 0, "warnings": 0, "flash_bytes": 0, "ram_bytes": 0}
+    metrics = {"errors": 0, "warnings": 0, "flash_bytes": 0, "ram_bytes": 0}
     if not os.path.isfile(log_path):
-        return summary
+        return metrics
 
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
+    with open(log_path, "r", encoding="utf-8", errors="replace") as file_obj:
+        content = file_obj.read()
 
-    # 匹配摘要行: "x Error(s), y Warning(s)"
-    m = re.search(r"(\d+)\s+Error\(s\)\s*,\s*(\d+)\s+Warning\(s\)", content)
-    if m:
-        summary["errors"] = int(m.group(1))
-        summary["warnings"] = int(m.group(2))
+    error_match = re.search(r"(\d+)\s+Error\(s\)\s*,\s*(\d+)\s+Warning\(s\)", content)
+    if error_match:
+        metrics["errors"] = int(error_match.group(1))
+        metrics["warnings"] = int(error_match.group(2))
 
-    # 匹配 Program Size: Code=xxx RO-data=xxx RW-data=xxx ZI-data=xxx
-    m = re.search(
+    size_match = re.search(
         r"Program Size:\s+Code=(\d+)\s+RO-data=(\d+)\s+RW-data=(\d+)\s+ZI-data=(\d+)",
         content,
     )
-    if m:
-        code_size = int(m.group(1))
-        ro_data = int(m.group(2))
-        rw_data = int(m.group(3))
-        zi_data = int(m.group(4))
-        summary["flash_bytes"] = code_size + ro_data + rw_data
-        summary["ram_bytes"] = rw_data + zi_data
+    if size_match:
+        code_size = int(size_match.group(1))
+        ro_data = int(size_match.group(2))
+        rw_data = int(size_match.group(3))
+        zi_data = int(size_match.group(4))
+        metrics["flash_bytes"] = code_size + ro_data + rw_data
+        metrics["ram_bytes"] = rw_data + zi_data
 
-    return summary
+    return metrics
 
 
 def _resolve_path(base_dir: Path, raw_path: str) -> Path:
@@ -72,8 +93,13 @@ def _resolve_path(base_dir: Path, raw_path: str) -> Path:
     return (base_dir / path).resolve()
 
 
+def _resolve_workspace_path(workspace: Path, raw_path: str | None, default: str) -> str:
+    value = default if is_missing(raw_path) else str(raw_path)
+    path = Path(value)
+    return str(path.resolve() if path.is_absolute() else (workspace / path).resolve())
+
+
 def _collect_target_artifacts(project_path: Path, target: str) -> dict:
-    """从 .uvprojx 中解析输出目录和名称，推断构建产物路径。"""
     if project_path.suffix.lower() != ".uvprojx":
         return {}
 
@@ -103,10 +129,7 @@ def _collect_target_artifacts(project_path: Path, target: str) -> dict:
     if common is None:
         return {}
 
-    output_dir = _resolve_path(
-        project_path.parent,
-        common.findtext("OutputDirectory", default=""),
-    )
+    output_dir = _resolve_path(project_path.parent, common.findtext("OutputDirectory", default=""))
     output_name = common.findtext("OutputName", default="").strip() or project_path.stem
 
     candidates = {
@@ -116,10 +139,10 @@ def _collect_target_artifacts(project_path: Path, target: str) -> dict:
         "bin_file": output_dir / f"{output_name}.bin",
     }
 
-    details = {}
-    for key, path in candidates.items():
-        if path.exists():
-            details[key] = str(path.resolve())
+    details: dict[str, str] = {}
+    for key, file_path in candidates.items():
+        if file_path.exists():
+            details[key] = str(file_path.resolve())
 
     if not details and output_dir.exists():
         for suffix, key in (
@@ -128,33 +151,41 @@ def _collect_target_artifacts(project_path: Path, target: str) -> dict:
             (".hex", "hex_file"),
             (".bin", "bin_file"),
         ):
-            matches = sorted(
-                output_dir.rglob(f"{output_name}*{suffix}"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
+            matches = sorted(output_dir.rglob(f"{output_name}*{suffix}"), key=lambda path: path.stat().st_mtime, reverse=True)
             if matches:
                 details[key] = str(matches[0].resolve())
 
     debug_file = details.get("elf_file") or details.get("axf_file")
-    flash_file = (
-        details.get("hex_file")
-        or details.get("bin_file")
-        or details.get("elf_file")
-        or details.get("axf_file")
-    )
+    flash_file = details.get("hex_file") or details.get("bin_file") or debug_file
     if debug_file:
         details["debug_file"] = debug_file
     if flash_file:
         details["flash_file"] = flash_file
     if output_dir.exists():
-        details["output_dir"] = str(output_dir)
+        details["output_dir"] = str(output_dir.resolve())
     return details
 
 
-def run_uv4(uv4_exe: str, action: str, project: str, target: str,
-            log_dir: str, clean_first: bool = False) -> dict:
-    """调用 UV4.exe 并返回结构化结果"""
+def _build_summary(action: str, status: str, metrics: dict) -> str:
+    errors = metrics.get("errors", 0)
+    warnings = metrics.get("warnings", 0)
+    if status == "error":
+        return f"{action} 失败，errors={errors} warnings={warnings}"
+    if action in ("build", "rebuild"):
+        return f"{action} 成功，errors={errors} warnings={warnings}"
+    return f"{action} 成功"
+
+
+def _next_actions(action: str, artifacts: dict) -> list[str]:
+    actions: list[str] = []
+    if action in ("build", "rebuild") and artifacts.get("flash_file"):
+        actions.append("可直接复用 artifacts.flash_file 继续 flash")
+    if action in ("build", "rebuild") and artifacts.get("debug_file"):
+        actions.append("可直接复用 artifacts.debug_file 继续 gdb 调试")
+    return actions
+
+
+def run_uv4(uv4_exe: str, action: str, project: str, target: str, log_dir: str, clean_first: bool = False) -> dict:
     project_path = Path(project).resolve()
     if not project_path.exists():
         return {
@@ -170,12 +201,10 @@ def run_uv4(uv4_exe: str, action: str, project: str, target: str,
             "error": {"code": "uv4_not_found", "message": f"UV4.exe 不存在: {uv4_exe}"},
         }
 
-    # 准备日志目录和文件
     log_path = Path(log_dir).resolve()
     log_path.mkdir(parents=True, exist_ok=True)
-    log_file = log_path / f"{project_path.stem}-{target}-{action}.log"
+    log_file = log_path / f"{project_path.stem}-{target or 'default'}-{action}.log"
 
-    # 构建命令
     flag = ACTION_FLAG[action]
     if action == "rebuild" and clean_first:
         flag = "-cr"
@@ -184,125 +213,251 @@ def run_uv4(uv4_exe: str, action: str, project: str, target: str,
     if target:
         cmd.extend(["-t", target])
 
-    # 执行
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        errorlevel = proc.returncode
     except subprocess.TimeoutExpired:
         return {
             "status": "error",
             "action": action,
             "error": {"code": "timeout", "message": "UV4.exe 执行超时(600s)"},
         }
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - 兜底异常
         return {
             "status": "error",
             "action": action,
-            "error": {"code": "exec_error", "message": str(e)},
+            "error": {"code": "exec_error", "message": str(exc)},
         }
 
-    # 解析结果
-    el_status, el_msg = ERRORLEVEL_MAP.get(errorlevel, ("error", f"未知返回码: {errorlevel}"))
-    summary = parse_log(str(log_file))
-
-    # 根据 errorlevel 和日志综合判断状态
-    if errorlevel >= 2:
-        status = "error"
-    elif summary["errors"] > 0:
-        status = "error"
-    else:
-        status = "ok"
-
-    artifact_details = _collect_target_artifacts(project_path, target)
+    metrics = parse_log(str(log_file))
+    _, errorlevel_desc = ERRORLEVEL_MAP.get(proc.returncode, ("error", f"未知返回码: {proc.returncode}"))
+    status = "error" if proc.returncode >= 2 or metrics["errors"] > 0 else "ok"
 
     return {
         "status": status,
         "action": action,
-        "summary": summary,
+        "metrics": metrics,
         "details": {
             "project": str(project_path),
             "target": target,
-            "log_file": str(log_file),
-            "errorlevel": errorlevel,
-            "errorlevel_desc": el_msg,
-            **artifact_details,
+            "log_file": str(log_file.resolve()),
+            "errorlevel": proc.returncode,
+            "errorlevel_desc": errorlevel_desc,
+            **_collect_target_artifacts(project_path, target),
         },
     }
 
 
 def check_last_build_ok(log_dir: str, project: str, target: str) -> bool:
-    """检查最近一次构建是否成功（flash 前置条件）"""
     log_path = Path(log_dir).resolve()
-    # 检查 build 和 rebuild 日志
+    stem = Path(project).stem
     for action in ("build", "rebuild"):
-        stem = Path(project).stem
-        log_file = log_path / f"{stem}-{target}-{action}.log"
+        log_file = log_path / f"{stem}-{target or 'default'}-{action}.log"
         if log_file.exists():
-            summary = parse_log(str(log_file))
-            if summary["errors"] == 0:
+            metrics = parse_log(str(log_file))
+            if metrics["errors"] == 0:
                 return True
     return False
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Keil MDK 构建/重建/清理/烧录")
     parser.add_argument("action", choices=["build", "rebuild", "clean", "flash"])
-    parser.add_argument("--uv4", required=True, help="UV4.exe 路径")
-    parser.add_argument("--project", required=True, help="工程文件路径")
-    parser.add_argument("--target", default="", help="Target 名称")
-    parser.add_argument("--log-dir", default=".build", help="日志输出目录")
+    parser.add_argument("--uv4", default=None, help="UV4.exe 路径")
+    parser.add_argument("--project", default=None, help="工程文件路径")
+    parser.add_argument("--target", default=None, help="Target 名称")
+    parser.add_argument("--log-dir", default=None, help="日志输出目录")
     parser.add_argument("--clean-first", action="store_true", help="rebuild 时先 clean")
+    parser.add_argument("--config", default=None, help="skill config.json 路径")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
-
     args = parser.parse_args()
 
-    # flash 前置检查
-    if args.action == "flash":
-        if not check_last_build_ok(args.log_dir, args.project, args.target):
-            result = {
-                "status": "error",
-                "action": "flash",
-                "error": {
-                    "code": "build_not_clean",
-                    "message": "最近一次构建存在错误或无构建记录，禁止继续烧录。请先执行 build 并确认无错误。",
-                },
-            }
-            if args.as_json:
-                output_json(result)
-            else:
-                print(f"错误: {result['error']['message']}", file=sys.stderr)
-            sys.exit(1)
+    started_at = now_iso()
+    started_ts = time.time()
+    workspace = workspace_root(args.workspace)
+    config_path = normalize_path(args.config or str(default_config_path(__file__)))
+    config = load_json_file(config_path)
+    state = load_workspace_state(str(workspace))
+    last_build = get_state_entry(state, "last_build")
 
-    result = run_uv4(
-        uv4_exe=args.uv4,
+    parameter_sources: dict[str, str] = {}
+    try:
+        uv4_exe, parameter_sources["uv4"] = resolve_param(
+            "uv4",
+            args.uv4,
+            config=config,
+            config_keys=["uv4_exe"],
+            required=True,
+            normalize_as_path=True,
+        )
+        project, parameter_sources["project"] = resolve_param(
+            "project",
+            args.project,
+            config=config,
+            config_keys=["default_project"],
+            state_record=last_build,
+            state_keys=["project"],
+            required=True,
+            normalize_as_path=True,
+        )
+        target, parameter_sources["target"] = resolve_param(
+            "target",
+            args.target,
+            config=config,
+            config_keys=["default_target"],
+            state_record=last_build,
+            state_keys=["target"],
+        )
+        log_dir = _resolve_workspace_path(workspace, args.log_dir or config.get("log_dir"), ".build")
+        parameter_sources["log_dir"] = "cli" if args.log_dir else ("config:log_dir" if config.get("log_dir") else "default")
+    except ValueError as exc:
+        result = make_result(
+            status="error",
+            action=args.action,
+            summary=str(exc),
+            details={},
+            context=parameter_context(
+                provider="keil",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            error={"code": "missing_param", "message": str(exc)},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.action == "flash" and not check_last_build_ok(log_dir, project, target or ""):
+        result = make_result(
+            status="error",
+            action="flash",
+            summary="最近构建不可用于 flash",
+            details={"project": project, "target": target, "log_dir": log_dir},
+            context=parameter_context(
+                provider="keil",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            error={
+                "code": "build_not_clean",
+                "message": "最近一次构建存在错误或无构建记录，禁止继续烧录。请先执行 build 并确认无错误。",
+            },
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {result['error']['message']}", file=sys.stderr)
+        sys.exit(1)
+
+    raw_result = run_uv4(
+        uv4_exe=uv4_exe,
         action=args.action,
-        project=args.project,
-        target=args.target,
-        log_dir=args.log_dir,
+        project=project,
+        target=target or "",
+        log_dir=log_dir,
         clean_first=args.clean_first,
     )
+    elapsed_ms = (time.time() - started_ts) * 1000
+
+    if raw_result["status"] == "error":
+        result = make_result(
+            status="error",
+            action=args.action,
+            summary=raw_result["error"]["message"],
+            details=raw_result.get("details", {}),
+            context=parameter_context(
+                provider="keil",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            error=raw_result["error"],
+            timing=make_timing(started_at, elapsed_ms),
+        )
+    else:
+        details = raw_result["details"]
+        artifacts = build_artifacts(
+            axf_file=details.get("axf_file"),
+            elf_file=details.get("elf_file"),
+            hex_file=details.get("hex_file"),
+            bin_file=details.get("bin_file"),
+            flash_file=details.get("flash_file"),
+            debug_file=details.get("debug_file"),
+            output_dir=details.get("output_dir"),
+            log_file=details.get("log_file"),
+        )
+        summary = _build_summary(args.action, raw_result["status"], raw_result["metrics"])
+        state_info = None
+        if args.action in ("build", "rebuild") and raw_result["status"] == "ok":
+            state_info = update_state_entry(
+                "last_build",
+                {
+                    "provider": "keil",
+                    "action": args.action,
+                    "project": project,
+                    "target": target,
+                    "log_dir": log_dir,
+                    "artifacts": artifacts,
+                    **artifacts,
+                },
+                str(workspace),
+            )
+        elif args.action == "flash" and raw_result["status"] == "ok":
+            state_info = update_state_entry(
+                "last_flash",
+                {
+                    "provider": "keil",
+                    "action": args.action,
+                    "project": project,
+                    "target": target,
+                    "artifacts": artifacts,
+                    **artifacts,
+                },
+                str(workspace),
+            )
+
+        result = make_result(
+            status=raw_result["status"],
+            action=args.action,
+            summary=summary,
+            details=details,
+            context=parameter_context(
+                provider="keil",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            artifacts=artifacts,
+            metrics=raw_result["metrics"],
+            state=state_info,
+            next_actions=_next_actions(args.action, artifacts),
+            timing=make_timing(started_at, elapsed_ms),
+        )
 
     if args.as_json:
         output_json(result)
+        return
+
+    if result["status"] == "ok":
+        print(f"[{args.action}] {result['summary']}")
+        if result.get("artifacts", {}).get("log_file"):
+            print(f"  日志: {result['artifacts']['log_file']}")
+        if result.get("artifacts", {}).get("flash_file"):
+            print(f"  Flash: {result['artifacts']['flash_file']}")
+        if result.get("artifacts", {}).get("debug_file"):
+            print(f"  Debug: {result['artifacts']['debug_file']}")
     else:
-        if result["status"] == "ok":
-            s = result.get("summary", {})
-            print(f"[{args.action}] 成功 — errors: {s.get('errors',0)}, warnings: {s.get('warnings',0)}")
-            if s.get("flash_bytes"):
-                print(f"  Flash: {s['flash_bytes']} bytes, RAM: {s['ram_bytes']} bytes")
-            print(f"  日志: {result['details']['log_file']}")
-        else:
-            err = result.get("error", result.get("details", {}))
-            msg = err.get("message", err.get("errorlevel_desc", "未知错误"))
-            print(f"[{args.action}] 失败 — {msg}", file=sys.stderr)
-            if "log_file" in result.get("details", {}):
-                print(f"  日志: {result['details']['log_file']}", file=sys.stderr)
-            sys.exit(1)
+        error = result.get("error", {})
+        print(f"[{args.action}] 失败 — {error.get('message', result['summary'])}", file=sys.stderr)
+        if result.get("details", {}).get("log_file"):
+            print(f"  日志: {result['details']['log_file']}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,32 +1,73 @@
-"""OpenOCD GDB Server 启动与调试
+"""OpenOCD GDB Server 启动与 one-shot 调试。"""
 
-子命令：
-- server: 启动 GDB Server 并保持运行（原有行为）
-- run:    启动 GDB Server + 执行自定义 GDB 命令序列 + 关闭
-- backtrace: 快捷获取调用栈
-- locals: 快捷查看局部变量
-"""
+from __future__ import annotations
 
 import argparse
-import json
 import os
-import re
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
-def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: str = "",
-                      search: str = "", adapter_speed: str = "", transport: str = "",
-                      gdb_port: int = 3333, telnet_port: int = 4444) -> list:
-    """构建 OpenOCD GDB Server 命令行"""
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from openocd_gdb_common import build_gdb_commands, parse_gdb_output, run_gdb_commands  # noqa: E402
+from openocd_runtime import (  # noqa: E402
+    build_artifacts,
+    default_config_path,
+    get_state_entry,
+    load_json_file,
+    load_workspace_state,
+    make_result,
+    make_timing,
+    normalize_path,
+    now_iso,
+    output_json,
+    parameter_context,
+    resolve_param,
+    update_state_entry,
+    workspace_root,
+)
+
+
+GDB_ACTIONS = [
+    "server",
+    "run",
+    "backtrace",
+    "locals",
+    "break",
+    "continue",
+    "next",
+    "step",
+    "finish",
+    "until",
+    "frame",
+    "print",
+    "watch",
+    "disassemble",
+    "threads",
+    "crash-report",
+]
+
+
+def build_openocd_cmd(
+    exe: str,
+    board: str = "",
+    interface: str = "",
+    target: str = "",
+    search: str = "",
+    adapter_speed: str = "",
+    transport: str = "",
+    gdb_port: int = 3333,
+    telnet_port: int = 4444,
+) -> list[str]:
     cmd = [exe]
-
     if search:
         cmd.extend(["-s", search])
-
-    # board 优先
     if board:
         cmd.extend(["-f", board])
     else:
@@ -34,25 +75,17 @@ def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: st
             cmd.extend(["-f", interface])
         if target:
             cmd.extend(["-f", target])
-
-    # adapter speed
     if adapter_speed:
         cmd.extend(["-c", f"adapter speed {adapter_speed}"])
-
-    # transport
     if transport:
         cmd.extend(["-c", f"transport select {transport}"])
-
-    # 端口配置
     cmd.extend(["-c", f"gdb_port {gdb_port}"])
     cmd.extend(["-c", f"telnet_port {telnet_port}"])
-
     return cmd
 
 
-def start_openocd_server(cmd: list) -> subprocess.Popen:
-    """启动 OpenOCD 进程"""
-    proc = subprocess.Popen(
+def start_openocd_server(cmd: list[str]) -> subprocess.Popen:
+    return subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -61,16 +94,14 @@ def start_openocd_server(cmd: list) -> subprocess.Popen:
         errors="replace",
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
     )
-    return proc
 
 
-def wait_server_ready(proc: subprocess.Popen, gdb_port: int, timeout: int = 15) -> tuple:
-    """等待 GDB Server 就绪，返回 (ready: bool, errors: list)"""
-    start = time.time()
-    errors = []
+def wait_server_ready(proc: subprocess.Popen, gdb_port: int, timeout: int = 15) -> tuple[bool, list[str]]:
+    started = time.time()
+    errors: list[str] = []
     ready = False
 
-    while time.time() - start < timeout:
+    while time.time() - started < timeout:
         if proc.poll() is not None:
             remaining = proc.stderr.read()
             for line in remaining.splitlines():
@@ -82,34 +113,35 @@ def wait_server_ready(proc: subprocess.Popen, gdb_port: int, timeout: int = 15) 
         if not line:
             time.sleep(0.1)
             continue
-
-        line = line.strip()
-
-        if "Error:" in line:
-            errors.append(line)
-
-        if f"Listening on port {gdb_port}" in line or "listening on" in line.lower():
+        stripped = line.strip()
+        if "Error:" in stripped:
+            errors.append(stripped)
+        if f"Listening on port {gdb_port}" in stripped or "listening on" in stripped.lower():
             ready = True
             break
 
     if not ready:
         return False, errors
 
-    critical_keywords = [
-        "open failed", "init mode failed", "no device found",
-        "cannot connect", "error connecting dp", "examination failed",
-        "failed to read memory", "failed to write memory",
-        "cannot read idr", "polling failed",
+    critical = [
+        "open failed",
+        "init mode failed",
+        "no device found",
+        "cannot connect",
+        "error connecting dp",
+        "examination failed",
+        "failed to read memory",
+        "failed to write memory",
+        "cannot read idr",
+        "polling failed",
     ]
-    critical_errors = [e for e in errors if any(k in e.lower() for k in critical_keywords)]
+    critical_errors = [item for item in errors if any(keyword in item.lower() for keyword in critical)]
     if critical_errors:
         return False, critical_errors
-
     return True, errors
 
 
-def cleanup(proc: subprocess.Popen):
-    """清理 OpenOCD 进程"""
+def cleanup(proc: subprocess.Popen | None) -> None:
     if proc and proc.poll() is None:
         try:
             if sys.platform == "win32":
@@ -121,281 +153,452 @@ def cleanup(proc: subprocess.Popen):
             proc.kill()
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2), flush=True)
-
-
-# ── GDB 命令执行 ─────────────────────────────────────────────
-
-def run_gdb_commands(gdb_exe: str, elf_file: str, gdb_port: int, commands: list) -> dict:
-    """通过 arm-none-eabi-gdb 执行调试命令"""
-    gdb_init = [f"target remote localhost:{gdb_port}"]
-    if elf_file:
-        gdb_init.insert(0, f"file {elf_file}")
-
-    all_commands = gdb_init + commands + ["quit"]
-
-    cmd = [gdb_exe, "--batch", "--nx"]
-    for c in all_commands:
-        cmd.extend(["-ex", c])
-
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
-            encoding="utf-8", errors="replace",
-        )
-        return {
-            "status": "ok" if proc.returncode == 0 else "error",
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "returncode": proc.returncode,
-        }
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "error": "GDB 执行超时(30s)"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-
-def parse_gdb_output(stdout: str, action: str) -> dict:
-    """解析 GDB 输出"""
-    result = {}
-
-    if action == "backtrace":
-        frames = re.findall(
-            r"#(\d+)\s+(?:0x[0-9a-fA-F]+\s+in\s+)?(\w+)\s*\(([^)]*)\)(?:\s+at\s+(.+))?",
-            stdout
-        )
-        if frames:
-            result["frames"] = []
-            for num, func, args, location in frames:
-                frame = {"frame": int(num), "function": func}
-                if args:
-                    frame["args"] = args.strip()
-                if location:
-                    frame["location"] = location.strip()
-                result["frames"].append(frame)
-
-    elif action == "locals":
-        var_lines = re.findall(r"^(\w+)\s*=\s*(.+)$", stdout, re.MULTILINE)
-        if var_lines:
-            result["variables"] = {name: val.strip() for name, val in var_lines}
-
-    return result
-
-
-# ── 主逻辑 ────────────────────────────────────────────────────
-
-def add_common_args(parser):
-    """添加公共参数"""
-    parser.add_argument("--exe", default="openocd", help="openocd 路径")
-    parser.add_argument("--board", default="", help="board 配置文件")
-    parser.add_argument("--interface", default="", help="interface 配置文件")
-    parser.add_argument("--target", default="", help="target 配置文件")
-    parser.add_argument("--search", default="", help="额外配置脚本搜索目录")
-    parser.add_argument("--adapter-speed", default="", help="调试速率 kHz")
-    parser.add_argument("--transport", default="", choices=["", "swd", "jtag"], help="传输协议")
-    parser.add_argument("--gdb-port", type=int, default=3333, help="GDB 端口")
-    parser.add_argument("--telnet-port", type=int, default=4444, help="Telnet 端口")
+def add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--exe", default=None, help="openocd 路径")
+    parser.add_argument("--board", default=None, help="board 配置文件")
+    parser.add_argument("--interface", default=None, help="interface 配置文件")
+    parser.add_argument("--target", default=None, help="target 配置文件")
+    parser.add_argument("--search", default=None, help="额外配置脚本搜索目录")
+    parser.add_argument("--adapter-speed", default=None, help="调试速率 kHz")
+    parser.add_argument("--transport", default=None, choices=["", "swd", "jtag"], help="传输协议")
+    parser.add_argument("--gdb-port", type=int, default=None, help="GDB 端口")
+    parser.add_argument("--telnet-port", type=int, default=None, help="Telnet 端口")
+    parser.add_argument("--gdb-exe", default=None, help="arm-none-eabi-gdb 路径")
+    parser.add_argument("--elf", default=None, help="ELF 文件路径")
+    parser.add_argument("--config", default=None, help="skill config.json 路径")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
 
 
-def validate_config(args) -> dict:
-    """校验配置，返回 None 或 error dict"""
-    if not args.board and not args.interface and not args.target:
-        return {
-            "status": "error",
-            "action": getattr(args, "command", "server") or "server",
-            "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target"},
-        }
-    return None
+def build_parser(legacy_server: bool) -> argparse.ArgumentParser:
+    if legacy_server:
+        parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动")
+        add_common_args(parser)
+        return parser
+
+    parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动与调试")
+    sub = parser.add_subparsers(dest="command")
+    for name in GDB_ACTIONS:
+        sub_parser = sub.add_parser(name, help=f"GDB {name}")
+        add_common_args(sub_parser)
+        if name == "run":
+            sub_parser.add_argument("--commands", nargs="+", required=True, help="GDB 命令序列")
+        elif name in {"break", "frame", "print", "watch"}:
+            sub_parser.add_argument("--expr", required=True, help="表达式或参数")
+        elif name in {"until", "disassemble"}:
+            sub_parser.add_argument("--expr", default=None, help="表达式或参数")
+    return parser
 
 
-SUBCOMMANDS = ("server", "run", "backtrace", "locals")
+def _legacy_mode() -> bool:
+    return not (len(sys.argv) > 1 and sys.argv[1] in GDB_ACTIONS)
 
 
-def main():
-    # 向后兼容：检测第一个参数是否为已知子命令
-    # 如果不是（如 --interface ...），按 server 模式处理
-    use_legacy = True
-    if len(sys.argv) > 1 and sys.argv[1] in SUBCOMMANDS:
-        use_legacy = False
+def _state_lookup(state: dict) -> dict:
+    last_build = get_state_entry(state, "last_build")
+    last_flash = get_state_entry(state, "last_flash")
+    last_debug = get_state_entry(state, "last_debug")
+    artifacts = last_build.get("artifacts", {})
+    return {
+        "board": last_debug.get("board") or last_flash.get("board"),
+        "interface": last_debug.get("interface") or last_flash.get("interface"),
+        "target": last_debug.get("target") or last_flash.get("target"),
+        "search": last_debug.get("search"),
+        "adapter_speed": last_debug.get("adapter_speed") or last_flash.get("adapter_speed"),
+        "transport": last_debug.get("transport") or last_flash.get("transport"),
+        "gdb_port": last_debug.get("gdb_port"),
+        "telnet_port": last_debug.get("telnet_port"),
+        "elf_file": last_build.get("debug_file") or last_build.get("elf_file") or artifacts.get("debug_file"),
+        "debug_file": last_build.get("debug_file") or artifacts.get("debug_file"),
+    }
 
-    if use_legacy:
-        # 旧版调用方式：直接传 --interface --target 等，无子命令
-        server_parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动")
-        add_common_args(server_parser)
-        args = server_parser.parse_args()
+
+def _summary(command: str, parsed: dict) -> str:
+    if command == "server":
+        return "gdb server 已就绪"
+    if command == "backtrace" and parsed.get("frames"):
+        return f"backtrace 完成，frames={len(parsed['frames'])}"
+    if command == "locals" and parsed.get("variables"):
+        return f"locals 完成，variables={len(parsed['variables'])}"
+    if command == "threads" and parsed.get("threads"):
+        return f"threads 完成，threads={len(parsed['threads'])}"
+    if command == "print" and parsed.get("value"):
+        return f"print 完成，value={parsed['value']}"
+    return f"gdb {command} 完成"
+
+
+def _metrics(parsed: dict) -> dict:
+    metrics: dict[str, int] = {}
+    if parsed.get("frames"):
+        metrics["frames"] = len(parsed["frames"])
+    if parsed.get("variables"):
+        metrics["variables"] = len(parsed["variables"])
+    if parsed.get("registers"):
+        metrics["registers"] = len(parsed["registers"])
+    if parsed.get("threads"):
+        metrics["threads"] = len(parsed["threads"])
+    if parsed.get("disassembly"):
+        metrics["instructions"] = len(parsed["disassembly"])
+    return metrics
+
+
+def main() -> None:
+    legacy_server = _legacy_mode()
+    parser = build_parser(legacy_server)
+    args = parser.parse_args()
+    if legacy_server:
         args.command = "server"
-    else:
-        parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动与调试")
-        sub = parser.add_subparsers(dest="command")
 
-        # server 子命令
-        server_p = sub.add_parser("server", help="启动 GDB Server 并保持运行")
-        add_common_args(server_p)
+    started_at = now_iso()
+    started_ts = time.time()
+    workspace = workspace_root(args.workspace)
+    config_path = normalize_path(args.config or str(default_config_path(__file__)))
+    config = load_json_file(config_path)
+    state = load_workspace_state(str(workspace))
+    state_lookup = _state_lookup(state)
 
-        # run 子命令
-        run_p = sub.add_parser("run", help="启动 GDB Server 并执行 GDB 命令序列")
-        add_common_args(run_p)
-        run_p.add_argument("--gdb-exe", required=True, help="arm-none-eabi-gdb 路径")
-        run_p.add_argument("--elf", default="", help="ELF 文件路径（提供源码级调试）")
-        run_p.add_argument("--commands", nargs="+", required=True,
-                           help="GDB 命令序列，如 'break main' 'continue' 'backtrace'")
-
-        # backtrace 子命令
-        bt_p = sub.add_parser("backtrace", help="获取当前调用栈")
-        add_common_args(bt_p)
-        bt_p.add_argument("--gdb-exe", required=True, help="arm-none-eabi-gdb 路径")
-        bt_p.add_argument("--elf", default="", help="ELF 文件路径")
-
-        # locals 子命令
-        loc_p = sub.add_parser("locals", help="查看当前帧局部变量")
-        add_common_args(loc_p)
-        loc_p.add_argument("--gdb-exe", required=True, help="arm-none-eabi-gdb 路径")
-        loc_p.add_argument("--elf", default="", help="ELF 文件路径")
-
-        args = parser.parse_args()
-
-    # 校验配置
-    err = validate_config(args)
-    if err:
+    parameter_sources: dict[str, str] = {}
+    try:
+        exe, parameter_sources["exe"] = resolve_param(
+            "exe",
+            args.exe,
+            config=config,
+            config_keys=["exe"],
+            required=True,
+        )
+        board, parameter_sources["board"] = resolve_param(
+            "board",
+            args.board,
+            config=config,
+            config_keys=["default_board"],
+            state_record=state_lookup,
+            state_keys=["board"],
+        )
+        interface, parameter_sources["interface"] = resolve_param(
+            "interface",
+            args.interface,
+            config=config,
+            config_keys=["default_interface"],
+            state_record=state_lookup,
+            state_keys=["interface"],
+        )
+        target, parameter_sources["target"] = resolve_param(
+            "target",
+            args.target,
+            config=config,
+            config_keys=["default_target"],
+            state_record=state_lookup,
+            state_keys=["target"],
+        )
+        search, parameter_sources["search"] = resolve_param(
+            "search",
+            args.search,
+            config=config,
+            config_keys=["scripts_dir"],
+            state_record=state_lookup,
+            state_keys=["search"],
+        )
+        adapter_speed, parameter_sources["adapter_speed"] = resolve_param(
+            "adapter_speed",
+            args.adapter_speed,
+            config=config,
+            config_keys=["adapter_speed"],
+            state_record=state_lookup,
+            state_keys=["adapter_speed"],
+        )
+        transport, parameter_sources["transport"] = resolve_param(
+            "transport",
+            args.transport,
+            config=config,
+            config_keys=["transport"],
+            state_record=state_lookup,
+            state_keys=["transport"],
+        )
+        gdb_port, parameter_sources["gdb_port"] = resolve_param(
+            "gdb_port",
+            args.gdb_port,
+            config=config,
+            config_keys=["gdb_port"],
+            state_record=state_lookup,
+            state_keys=["gdb_port"],
+        )
+        telnet_port, parameter_sources["telnet_port"] = resolve_param(
+            "telnet_port",
+            args.telnet_port,
+            config=config,
+            config_keys=["telnet_port"],
+            state_record=state_lookup,
+            state_keys=["telnet_port"],
+        )
+    except ValueError as exc:
+        result = make_result(
+            status="error",
+            action=getattr(args, "command", "server"),
+            summary=str(exc),
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "missing_param", "message": str(exc)},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
         if args.as_json:
-            output_json(err)
+            output_json(result)
         else:
-            print(f"错误: {err['error']['message']}", file=sys.stderr, flush=True)
+            print(f"错误: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 校验 GDB 工具路径
-    if args.command in ("run", "backtrace", "locals"):
-        if not os.path.isfile(args.gdb_exe):
-            result = {
-                "status": "error", "action": args.command,
-                "error": {"code": "gdb_not_found",
-                          "message": f"arm-none-eabi-gdb 不存在: {args.gdb_exe}。"
-                                     "请安装 Arm GNU Toolchain"},
-            }
+    if not board and not interface and not target:
+        message = "必须提供 --board 或 --interface + --target"
+        result = make_result(
+            status="error",
+            action=args.command,
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "missing_config", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        sys.exit(1)
+
+    gdb_exe = None
+    elf_file = None
+    if args.command != "server":
+        try:
+            gdb_exe, parameter_sources["gdb_exe"] = resolve_param(
+                "gdb_exe",
+                args.gdb_exe,
+                config=config,
+                config_keys=["gdb_exe"],
+                required=True,
+                normalize_as_path=True,
+            )
+            elf_file, parameter_sources["elf"] = resolve_param(
+                "elf",
+                args.elf,
+                config=config,
+                config_keys=["default_elf"],
+                state_record=state_lookup,
+                state_keys=["elf_file", "debug_file"],
+                normalize_as_path=True,
+            )
+        except ValueError as exc:
+            result = make_result(
+                status="error",
+                action=args.command,
+                summary=str(exc),
+                details={},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "missing_param", "message": str(exc)},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
             if args.as_json:
                 output_json(result)
             else:
-                print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
+                print(f"错误: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        if not os.path.isfile(gdb_exe):
+            message = f"arm-none-eabi-gdb 不存在: {gdb_exe}"
+            result = make_result(
+                status="error",
+                action=args.command,
+                summary=message,
+                details={},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "gdb_not_found", "message": message},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
+            if args.as_json:
+                output_json(result)
+            else:
+                print(f"错误: {message}", file=sys.stderr)
             sys.exit(1)
 
     cmd = build_openocd_cmd(
-        exe=args.exe, board=args.board, interface=args.interface, target=args.target,
-        search=args.search, adapter_speed=args.adapter_speed, transport=args.transport,
-        gdb_port=args.gdb_port, telnet_port=args.telnet_port,
+        exe=exe,
+        board=board or "",
+        interface=interface or "",
+        target=target or "",
+        search=search or "",
+        adapter_speed=str(adapter_speed or ""),
+        transport=transport or "",
+        gdb_port=int(gdb_port or 3333),
+        telnet_port=int(telnet_port or 4444),
     )
 
-    proc = None
+    proc: subprocess.Popen | None = None
     try:
         proc = start_openocd_server(cmd)
-        ready, errors = wait_server_ready(proc, args.gdb_port)
-
+        ready, errors = wait_server_ready(proc, int(gdb_port or 3333))
         if not ready:
-            error_msg = "; ".join(errors) if errors else "GDB Server 启动失败或超时"
-            result = {
-                "status": "error",
-                "action": args.command,
-                "error": {"code": "gdbserver_failed", "message": error_msg},
-            }
-            cleanup(proc)
+            message = "; ".join(errors) if errors else "GDB Server 启动失败或超时"
+            result = make_result(
+                status="error",
+                action=args.command,
+                summary="GDB Server 启动失败",
+                details={"errors": errors},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "gdbserver_failed", "message": message},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
             if args.as_json:
                 output_json(result)
             else:
-                print(f"[{args.command}] 失败 — {error_msg}", file=sys.stderr, flush=True)
+                print(f"[{args.command}] 失败 — {message}", file=sys.stderr)
             sys.exit(1)
 
-        # ── server 模式：保持运行 ──
         if args.command == "server":
-            result = {
-                "status": "ok",
-                "action": "gdb-server",
-                "summary": "GDB Server 已就绪",
-                "details": {
-                    "gdb_port": args.gdb_port,
-                    "telnet_port": args.telnet_port,
-                    "pid": proc.pid,
-                    "connect_cmd": f"arm-none-eabi-gdb -ex 'target remote localhost:{args.gdb_port}'",
+            state_info = update_state_entry(
+                "last_debug",
+                {
+                    "provider": "openocd",
+                    "action": "server",
+                    "board": board or "",
+                    "interface": interface or "",
+                    "target": target or "",
+                    "search": search or "",
+                    "adapter_speed": adapter_speed or "",
+                    "transport": transport or "",
+                    "gdb_port": int(gdb_port or 3333),
+                    "telnet_port": int(telnet_port or 4444),
                 },
-            }
-            if errors:
-                result["details"]["warnings"] = errors
-
+                str(workspace),
+            )
+            result = make_result(
+                status="ok",
+                action="server",
+                summary=_summary("server", {}),
+                details={
+                    "gdb_port": int(gdb_port or 3333),
+                    "telnet_port": int(telnet_port or 4444),
+                    "pid": proc.pid,
+                    "connect_cmd": f"arm-none-eabi-gdb -ex 'target remote localhost:{int(gdb_port or 3333)}'",
+                    "warnings": errors,
+                },
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                state=state_info,
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
             if args.as_json:
                 output_json(result)
             else:
-                print(f"[gdb-server] GDB Server 已就绪", flush=True)
-                print(f"  GDB 端口: {args.gdb_port}", flush=True)
-                print(f"  Telnet 端口: {args.telnet_port}", flush=True)
-                print(f"  PID: {proc.pid}", flush=True)
-                print(f"  连接: arm-none-eabi-gdb -ex 'target remote localhost:{args.gdb_port}'", flush=True)
-                if errors:
-                    print(f"  警告: {'; '.join(errors)}", flush=True)
-
-            # 保持运行
+                print("[gdb-server] GDB Server 已就绪")
+                print(f"  GDB 端口: {int(gdb_port or 3333)}")
+                print(f"  Telnet 端口: {int(telnet_port or 4444)}")
+                print(f"  PID: {proc.pid}")
             try:
                 proc.wait()
             except KeyboardInterrupt:
                 pass
             return
 
-        # ── run / backtrace / locals 模式：执行 GDB 命令后退出 ──
-        if args.command == "run":
-            gdb_commands = list(args.commands)
-        elif args.command == "backtrace":
-            gdb_commands = ["backtrace"]
-        elif args.command == "locals":
-            gdb_commands = ["info locals"]
-        else:
-            gdb_commands = []
+        try:
+            if args.command == "run":
+                gdb_commands = list(args.commands)
+            else:
+                gdb_commands = build_gdb_commands(args.command, getattr(args, "expr", None))
+        except ValueError as exc:
+            result = make_result(
+                status="error",
+                action=args.command,
+                summary=str(exc),
+                details={},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": "invalid_args", "message": str(exc)},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
+            if args.as_json:
+                output_json(result)
+            else:
+                print(f"错误: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-        elf = getattr(args, "elf", "")
-        gdb_result = run_gdb_commands(args.gdb_exe, elf, args.gdb_port, gdb_commands)
-
+        gdb_result = run_gdb_commands(gdb_exe, elf_file or "", f"localhost:{int(gdb_port or 3333)}", gdb_commands)
+        elapsed_ms = (time.time() - started_ts) * 1000
         if gdb_result["status"] == "error":
-            result = {
-                "status": "error", "action": args.command,
-                "error": {"code": "gdb_error",
-                          "message": gdb_result.get("error", gdb_result.get("stderr", "GDB 执行失败"))},
-            }
+            result = make_result(
+                status="error",
+                action=args.command,
+                summary="GDB 执行失败",
+                details={"gdb_port": int(gdb_port or 3333), "errors": errors},
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                artifacts=build_artifacts(debug_file=elf_file),
+                error={"code": "gdb_error", "message": gdb_result.get("error", gdb_result.get("stderr", "GDB 执行失败"))},
+                timing=make_timing(started_at, elapsed_ms),
+            )
         else:
             parsed = parse_gdb_output(gdb_result["stdout"], args.command)
-            result = {
-                "status": "ok",
-                "action": args.command,
-                "summary": f"GDB {args.command} 执行成功",
-                "details": {
-                    "gdb_port": args.gdb_port,
-                    "output": gdb_result["stdout"],
-                    **parsed,
+            artifacts = build_artifacts(debug_file=elf_file)
+            state_info = update_state_entry(
+                "last_debug",
+                {
+                    "provider": "openocd",
+                    "action": args.command,
+                    "board": board or "",
+                    "interface": interface or "",
+                    "target": target or "",
+                    "search": search or "",
+                    "adapter_speed": adapter_speed or "",
+                    "transport": transport or "",
+                    "gdb_port": int(gdb_port or 3333),
+                    "telnet_port": int(telnet_port or 4444),
+                    "debug_file": elf_file or "",
+                    "artifacts": artifacts,
                 },
-            }
+                str(workspace),
+            )
+            result = make_result(
+                status="ok",
+                action=args.command,
+                summary=_summary(args.command, parsed),
+                details={
+                    "gdb_port": int(gdb_port or 3333),
+                    "telnet_port": int(telnet_port or 4444),
+                    "commands": gdb_commands,
+                    "output": parsed.get("output", ""),
+                    "returncode": gdb_result.get("returncode", 0),
+                    "warnings": errors,
+                    **{key: value for key, value in parsed.items() if key != "output"},
+                },
+                context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                artifacts=artifacts,
+                metrics=_metrics(parsed),
+                state=state_info,
+                next_actions=["可继续基于 last_debug 复用 cfg 组合和 debug_file"],
+                timing=make_timing(started_at, elapsed_ms),
+            )
 
         if args.as_json:
             output_json(result)
+        elif result["status"] == "ok":
+            print(f"[gdb-{args.command}] {result['summary']}")
+            output = result.get("details", {}).get("output", "")
+            if output:
+                print(output)
         else:
-            if result["status"] == "ok":
-                print(f"[gdb-{args.command}] 成功", flush=True)
-                print(result["details"].get("output", ""), flush=True)
-            else:
-                err = result.get("error", {})
-                print(f"[gdb-{args.command}] 失败 — {err.get('message', '未知错误')}", file=sys.stderr, flush=True)
-                sys.exit(1)
-
+            print(f"[gdb-{args.command}] 失败 — {result['error']['message']}", file=sys.stderr)
+            sys.exit(1)
     except FileNotFoundError:
-        result = {
-            "status": "error",
-            "action": args.command,
-            "error": {"code": "exe_not_found", "message": f"openocd 不存在或不在 PATH 中: {args.exe}"},
-        }
+        message = f"openocd 不存在或不在 PATH 中: {exe}"
+        result = make_result(
+            status="error",
+            action=args.command,
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "exe_not_found", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr, flush=True)
+            print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
     finally:
-        if proc:
+        if args.command != "server":
             cleanup(proc)
 
 

@@ -20,6 +20,7 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 ```json
 {
   "uv4_exe": "C:\\Keil_v5\\UV4\\UV4.exe",
+  "default_project": "",
   "default_target": "",
   "log_dir": ".build",
   "operation_mode": 1
@@ -27,6 +28,7 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 ```
 
 - `uv4_exe`：UV4.exe 完整路径（必填）
+- `default_project`：默认工程路径，可为空；为空时优先读取 workspace 最近状态
 - `default_target`：默认 Target，为空时需用户指定或从工程中选择
 - `log_dir`：构建日志输出目录，默认 `.build`
 - `operation_mode`：`1` 直接执行 / `2` 输出风险摘要但不阻塞 / `3` 执行前确认
@@ -82,21 +84,22 @@ python <skill-dir>/scripts/keil_build.py <build|rebuild|clean|flash> \
 
 ## 输出格式
 
-所有脚本以 JSON 格式返回，包含 `status`（ok/error）、`action`、`summary`、`details` 字段。
+所有脚本以 JSON 格式返回，基础字段为 `status`（ok/error）、`action`、`summary`、`details`，并可能附带 `context`、`artifacts`、`metrics`、`state`、`next_actions`、`timing`。
 
 成功示例：
 ```json
 {
   "status": "ok",
   "action": "build",
-  "summary": { "errors": 0, "warnings": 2, "flash_bytes": 32768, "ram_bytes": 8192 },
+  "summary": "build 成功，errors=0 warnings=2",
   "details": {
     "project": "project.uvprojx",
     "target": "Debug",
     "log_file": ".build/project-Debug-build.log",
     "flash_file": "Objects/project.hex",
     "debug_file": "Objects/project.axf"
-  }
+  },
+  "metrics": { "errors": 0, "warnings": 2, "flash_bytes": 32768, "ram_bytes": 8192 }
 }
 ```
 
@@ -113,6 +116,7 @@ python <skill-dir>/scripts/keil_build.py <build|rebuild|clean|flash> \
 
 - 不修改工程配置文件（.uvprojx / .uvmpw / .uvoptx）
 - 不自动猜测工程路径或 Target，有歧义时必须询问用户
+- 参数解析优先级为：CLI 显式参数 > `config.json` > `.embeddedskills/state.json` > 报错
 - 构建成功后优先使用返回的 `flash_file` / `debug_file` 与 `jlink/openocd` 串联
 - `flash` 前必须确认最近一次构建成功（errors == 0）
 - `clean` 不在自动流程中隐式执行

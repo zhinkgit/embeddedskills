@@ -1,0 +1,27 @@
+{
+  "preferred_build": "auto",
+  "preferred_flash": "auto",
+  "preferred_debug": "auto",
+  "preferred_observe": "auto",
+  "keil": {
+    "project": "",
+    "target": "",
+    "uv4_exe": ""
+  },
+  "gcc": {
+    "project": "",
+    "preset": "",
+    "cmake_exe": "cmake"
+  },
+  "jlink": {
+    "device": "",
+    "interface": "SWD",
+    "speed": "4000"
+  },
+  "openocd": {
+    "board": "",
+    "interface": "",
+    "target": "",
+    "gdb_exe": ""
+  }
+}

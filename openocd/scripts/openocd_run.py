@@ -1,7 +1,8 @@
-"""OpenOCD 探针探测、固件烧录、Flash 擦除、目标复位"""
+"""OpenOCD 探针探测、固件烧录、Flash 擦除、目标复位与底层查询。"""
+
+from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -10,7 +11,28 @@ import time
 from pathlib import Path
 
 
-# 错误模式匹配
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from openocd_runtime import (  # noqa: E402
+    build_artifacts,
+    default_config_path,
+    get_state_entry,
+    load_json_file,
+    load_workspace_state,
+    make_result,
+    make_timing,
+    normalize_path,
+    now_iso,
+    output_json,
+    parameter_context,
+    resolve_param,
+    update_state_entry,
+    workspace_root,
+)
+
+
 ERROR_PATTERNS = [
     (r"Error:\s*open failed", "adapter_open_failed", "调试器打开失败，请检查 USB 连接和驱动"),
     (r"Error:\s*Failed to open device", "adapter_open_failed", "调试器打开失败，请检查 USB 连接和驱动"),
@@ -32,17 +54,22 @@ ERROR_PATTERNS = [
     (r"Error:\s*Could not connect", "cannot_connect", "无法连接目标，请检查连线、供电和接口类型"),
 ]
 
+ALL_ACTIONS = ["probe", "flash", "erase", "reset", "reset-init", "targets", "flash-banks", "adapter-info", "raw"]
 
-def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: str = "",
-                      search: str = "", adapter_speed: str = "", transport: str = "",
-                      extra_commands: list = None) -> list:
-    """构建 openocd 命令行"""
+
+def build_openocd_cmd(
+    exe: str,
+    board: str = "",
+    interface: str = "",
+    target: str = "",
+    search: str = "",
+    adapter_speed: str = "",
+    transport: str = "",
+    extra_commands: list[str] | None = None,
+) -> list[str]:
     cmd = [exe]
-
     if search:
         cmd.extend(["-s", search])
-
-    # board 优先
     if board:
         cmd.extend(["-f", board])
     else:
@@ -50,94 +77,17 @@ def build_openocd_cmd(exe: str, board: str = "", interface: str = "", target: st
             cmd.extend(["-f", interface])
         if target:
             cmd.extend(["-f", target])
-
-    # adapter speed
     if adapter_speed:
         cmd.extend(["-c", f"adapter speed {adapter_speed}"])
-
-    # transport
     if transport:
         cmd.extend(["-c", f"transport select {transport}"])
-
-    # 追加命令
-    if extra_commands:
-        for c in extra_commands:
-            cmd.extend(["-c", c])
-
+    for command in extra_commands or []:
+        cmd.extend(["-c", command])
     return cmd
 
 
-def parse_output(combined: str, action: str) -> dict:
-    """解析 OpenOCD 输出"""
-    result = {"raw": combined}
-
-    # 检查错误模式
-    for pattern, code, message in ERROR_PATTERNS:
-        if re.search(pattern, combined, re.IGNORECASE):
-            return {"error_code": code, "error_message": message, "raw": combined}
-
-    # 通用 Error 检查（放在具体模式后面，作为兜底）
-    generic_errors = re.findall(r"Error:\s*(.+)", combined)
-    if generic_errors and action != "probe":
-        # probe 模式下某些 Error 可能是正常的（如 target 没完全初始化就 shutdown）
-        # 其他模式下如果有 Error 且前面没匹配到具体模式，作为通用错误
-        pass  # 由调用方根据 returncode 判断
-
-    if action == "probe":
-        # 提取 target 信息
-        target_match = re.search(r"Info\s*:\s*(\S+\.cm\S*)\s", combined)
-        if target_match:
-            result["core"] = target_match.group(1)
-        # 提取 JTAG tap
-        tap_match = re.search(r"Info\s*:\s*JTAG tap:\s*(\S+)", combined)
-        if tap_match:
-            result["jtag_tap"] = tap_match.group(1)
-        # 提取 flash 大小
-        flash_match = re.search(r"flash size\s*=\s*(\d+)\s*(\w?)bytes", combined, re.IGNORECASE)
-        if flash_match:
-            size = int(flash_match.group(1))
-            unit = flash_match.group(2).lower()
-            if unit == "k":
-                size *= 1024
-            elif unit == "m":
-                size *= 1024 * 1024
-            result["flash_size_bytes"] = size
-
-    elif action == "flash":
-        # 提取烧录速度
-        speed_match = re.search(r"wrote\s+(\d+)\s+bytes.*?in\s+([\d.]+)s\s+\(([\d.]+)\s+KiB/s\)", combined)
-        if speed_match:
-            result["bytes_written"] = int(speed_match.group(1))
-            result["elapsed_s"] = float(speed_match.group(2))
-            result["speed_kbps"] = float(speed_match.group(3))
-        # 校验
-        if "verified OK" in combined or "** Verified OK **" in combined:
-            result["verified"] = True
-        # 烧录成功标志
-        if "** Programming Finished **" in combined:
-            result["programmed"] = True
-
-    elif action == "erase":
-        if "erased sectors" in combined.lower():
-            result["erased"] = True
-            result["mode"] = "sector"
-            sector_match = re.search(r"erased sectors\s+(\d+)\s+through\s+(\d+)\s+on flash bank\s+(\d+)\s+in\s+([\d.]+)s", combined, re.IGNORECASE)
-            if sector_match:
-                result["first_sector"] = int(sector_match.group(1))
-                result["last_sector"] = int(sector_match.group(2))
-                result["bank"] = int(sector_match.group(3))
-                result["elapsed_s"] = float(sector_match.group(4))
-        elif "mass erase complete" in combined.lower():
-            result["erased"] = True
-            result["mode"] = "mass"
-
-    return result
-
-
 def infer_mass_erase_command(target: str, board: str) -> str:
-    """根据 target/board 推断可用的 mass erase 命令"""
     cfg = (target or board).lower()
-
     command_map = {
         "stm32f0": "stm32f1x mass_erase 0",
         "stm32f1": "stm32f1x mass_erase 0",
@@ -152,294 +102,408 @@ def infer_mass_erase_command(target: str, board: str) -> str:
         "stm32l1": "stm32lx mass_erase 0",
         "stm32l4": "stm32l4x mass_erase 0",
         "stm32u5": "stm32l4x mass_erase 0",
-        "stm32wb": "stm32l4x mass_erase 0",
-        "stm32wl": "stm32l4x mass_erase 0",
-        "stm32mp13": "stm32mp15x mass_erase 0",
-        "stm32mp15": "stm32mp15x mass_erase 0",
         "gd32f1": "stm32f1x mass_erase 0",
-        "gd32f3": "stm32f1x mass_erase 0",
         "gd32f4": "stm32f4x mass_erase 0",
-        "gd32e10": "stm32f1x mass_erase 0",
     }
-
     for key, command in command_map.items():
         if key in cfg:
             return command
     return ""
 
 
-def run_openocd(exe: str, action: str, board: str = "", interface: str = "",
-                target: str = "", search: str = "", adapter_speed: str = "",
-                transport: str = "", file: str = "", address: str = "",
-                reset_mode: str = "run", bank: str = "", erase_mode: str = "auto") -> dict:
-    """执行 OpenOCD 命令"""
-    start_time = time.time()
-
-    # 参数校验：board 或 interface+target 至少有一个
-    if not board and not interface and not target:
-        return {
-            "status": "error",
-            "action": action,
-            "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target"},
-        }
-
-    # flash 校验
-    if action == "flash":
-        if not file:
-            return {
-                "status": "error",
-                "action": action,
-                "error": {"code": "missing_file", "message": "flash 必须提供 --file 固件文件路径"},
-            }
-        if file.lower().endswith(".bin") and not address:
-            return {
-                "status": "error",
-                "action": action,
-                "error": {"code": "missing_address", "message": ".bin 文件必须提供 --address 烧录地址"},
-            }
-
-    # 构建 OpenOCD 命令
-    extra_commands = []
-
+def build_action_commands(
+    action: str,
+    *,
+    board: str = "",
+    target: str = "",
+    file: str = "",
+    address: str = "",
+    reset_mode: str = "run",
+    bank: str = "",
+    erase_mode: str = "auto",
+    raw_commands: list[str] | None = None,
+) -> tuple[list[str], str | None]:
     if action == "probe":
-        extra_commands = ["init", "targets", "shutdown"]
-
-    elif action == "flash":
-        # 根据文件类型选择烧录命令
+        return ["init", "targets", "shutdown"], None
+    if action == "targets":
+        return ["init", "targets", "shutdown"], None
+    if action == "flash-banks":
+        return ["init", "flash banks", "shutdown"], None
+    if action == "adapter-info":
+        return ["adapter name", "transport list", "adapter speed", "shutdown"], None
+    if action == "flash":
         file_abs = os.path.abspath(file).replace("\\", "/")
         if file.lower().endswith(".bin"):
-            extra_commands = [
-                "init",
-                f"program {{{file_abs}}} verify reset exit {address}",
-            ]
-        else:
-            # .elf / .hex 不需要地址
-            extra_commands = [
-                "init",
-                f"program {{{file_abs}}} verify reset exit",
-            ]
-
-    elif action == "erase":
+            return ["init", f"program {{{file_abs}}} verify reset exit {address}"], None
+        return ["init", f"program {{{file_abs}}} verify reset exit"], None
+    if action == "erase":
         bank_idx = bank if bank else "0"
         mass_erase_cmd = infer_mass_erase_command(target, board)
-        extra_commands = ["init", "reset halt"]
+        commands = ["init", "reset halt"]
         if erase_mode == "mass":
-            if not mass_erase_cmd:
-                return {
-                    "status": "error",
-                    "action": action,
-                    "error": {"code": "mass_erase_unsupported", "message": "当前 target/board 未配置 mass erase 命令，请改用 --mode sector 或补充映射"},
-                }
-            extra_commands.append(mass_erase_cmd)
+            commands.append(mass_erase_cmd)
         elif erase_mode == "sector":
-            extra_commands.append(f"flash erase_sector {bank_idx} 0 last")
+            commands.append(f"flash erase_sector {bank_idx} 0 last")
         else:
-            if mass_erase_cmd:
-                extra_commands.append(mass_erase_cmd)
-            else:
-                extra_commands.append(f"flash erase_sector {bank_idx} 0 last")
-        extra_commands.append("shutdown")
-
-    elif action == "reset":
+            commands.append(mass_erase_cmd or f"flash erase_sector {bank_idx} 0 last")
+        commands.append("shutdown")
+        return commands, None
+    if action in ("reset", "reset-init"):
+        if action == "reset-init" or reset_mode == "init":
+            return ["init", "reset init", "shutdown"], None
         if reset_mode == "halt":
-            extra_commands = ["init", "reset halt", "shutdown"]
-        elif reset_mode == "init":
-            extra_commands = ["init", "reset init", "shutdown"]
-        else:
-            extra_commands = ["init", "reset run", "shutdown"]
+            return ["init", "reset halt", "shutdown"], None
+        return ["init", "reset run", "shutdown"], None
+    if action == "raw":
+        return (raw_commands or []) + ["shutdown"], None
+    return [], "unknown_action"
 
-    cmd = build_openocd_cmd(
-        exe=exe, board=board, interface=interface, target=target,
-        search=search, adapter_speed=adapter_speed, transport=transport,
-        extra_commands=extra_commands,
+
+def parse_output(combined: str, action: str) -> dict:
+    result = {"raw": combined}
+    for pattern, code, message in ERROR_PATTERNS:
+        if re.search(pattern, combined, re.IGNORECASE):
+            return {"error_code": code, "error_message": message, "raw": combined}
+
+    if action in ("probe", "targets"):
+        target_match = re.search(r"Info\s*:\s*(\S+\.cm\S*)\s", combined)
+        if target_match:
+            result["core"] = target_match.group(1)
+        tap_match = re.search(r"Info\s*:\s*JTAG tap:\s*(\S+)", combined)
+        if tap_match:
+            result["jtag_tap"] = tap_match.group(1)
+        result["targets"] = [line.strip() for line in combined.splitlines() if line.strip() and "tap/device found" not in line.lower()]
+
+    elif action == "flash":
+        speed_match = re.search(r"wrote\s+(\d+)\s+bytes.*?in\s+([\d.]+)s\s+\(([\d.]+)\s+KiB/s\)", combined)
+        if speed_match:
+            result["bytes_written"] = int(speed_match.group(1))
+            result["elapsed_s"] = float(speed_match.group(2))
+            result["speed_kbps"] = float(speed_match.group(3))
+        if "verified OK" in combined or "** Verified OK **" in combined:
+            result["verified"] = True
+        if "** Programming Finished **" in combined:
+            result["programmed"] = True
+
+    elif action == "erase":
+        if "erased sectors" in combined.lower():
+            result["erased"] = True
+            result["mode"] = "sector"
+            sector_match = re.search(
+                r"erased sectors\s+(\d+)\s+through\s+(\d+)\s+on flash bank\s+(\d+)\s+in\s+([\d.]+)s",
+                combined,
+                re.IGNORECASE,
+            )
+            if sector_match:
+                result["first_sector"] = int(sector_match.group(1))
+                result["last_sector"] = int(sector_match.group(2))
+                result["bank"] = int(sector_match.group(3))
+                result["elapsed_s"] = float(sector_match.group(4))
+        elif "mass erase complete" in combined.lower():
+            result["erased"] = True
+            result["mode"] = "mass"
+
+    elif action == "flash-banks":
+        result["flash_banks"] = [line.strip() for line in combined.splitlines() if "flash bank" in line.lower()]
+
+    elif action == "adapter-info":
+        name_match = re.search(r"adapter name:\s*(.+)", combined, re.IGNORECASE)
+        if name_match:
+            result["adapter_name"] = name_match.group(1).strip()
+        transport_match = re.search(r"Transport\s+\w+\s+available", combined)
+        if transport_match:
+            result["transport_info"] = transport_match.group(0)
+
+    return result
+
+
+def run_openocd(
+    exe: str,
+    action: str,
+    board: str = "",
+    interface: str = "",
+    target: str = "",
+    search: str = "",
+    adapter_speed: str = "",
+    transport: str = "",
+    file: str = "",
+    address: str = "",
+    reset_mode: str = "run",
+    bank: str = "",
+    erase_mode: str = "auto",
+    raw_commands: list[str] | None = None,
+) -> dict:
+    if not board and not interface and not target:
+        return {"status": "error", "action": action, "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target"}}
+
+    if action == "flash":
+        if not file:
+            return {"status": "error", "action": action, "error": {"code": "missing_file", "message": "flash 必须提供 --file 固件文件路径"}}
+        if file.lower().endswith(".bin") and not address:
+            return {"status": "error", "action": action, "error": {"code": "missing_address", "message": ".bin 文件必须提供 --address 烧录地址"}}
+
+    action_commands, error_code = build_action_commands(
+        action,
+        board=board,
+        target=target,
+        file=file,
+        address=address,
+        reset_mode=reset_mode,
+        bank=bank,
+        erase_mode=erase_mode,
+        raw_commands=raw_commands,
     )
+    if error_code:
+        return {"status": "error", "action": action, "error": {"code": error_code, "message": f"未知动作: {action}"}}
+    if action == "erase" and not any("flash erase_sector" in item or "mass_erase" in item for item in action_commands):
+        return {"status": "error", "action": action, "error": {"code": "mass_erase_unsupported", "message": "当前 target/board 未配置 mass erase 命令，请改用 --mode sector 或补充映射"}}
 
+    started = time.time()
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120,
-            encoding="utf-8", errors="replace",
+            build_openocd_cmd(
+                exe=exe,
+                board=board,
+                interface=interface,
+                target=target,
+                search=search,
+                adapter_speed=adapter_speed,
+                transport=transport,
+                extra_commands=action_commands,
+            ),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
-        return {
-            "status": "error",
-            "action": action,
-            "error": {"code": "exe_not_found", "message": f"openocd 不存在或不在 PATH 中: {exe}"},
-        }
+        return {"status": "error", "action": action, "error": {"code": "exe_not_found", "message": f"openocd 不存在或不在 PATH 中: {exe}"}}
     except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "action": action,
-            "error": {"code": "timeout", "message": "OpenOCD 执行超时(120s)"},
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "action": action,
-            "error": {"code": "exec_error", "message": str(e)},
-        }
+        return {"status": "error", "action": action, "error": {"code": "timeout", "message": "OpenOCD 执行超时(120s)"}}
+    except Exception as exc:  # pragma: no cover
+        return {"status": "error", "action": action, "error": {"code": "exec_error", "message": str(exc)}}
 
-    elapsed_ms = int((time.time() - start_time) * 1000)
-
-    # OpenOCD 的主要输出在 stderr
+    elapsed_ms = int((time.time() - started) * 1000)
     combined = proc.stderr + "\n" + proc.stdout
     parsed = parse_output(combined, action)
-
     if "error_code" in parsed:
         return {
             "status": "error",
             "action": action,
             "error": {"code": parsed["error_code"], "message": parsed["error_message"]},
-            "details": {
-                "board": board,
-                "interface": interface,
-                "target": target,
-                "elapsed_ms": elapsed_ms,
-                "returncode": proc.returncode,
-            },
+            "details": {"board": board, "interface": interface, "target": target, "elapsed_ms": elapsed_ms, "returncode": proc.returncode},
         }
 
-    # 构建摘要
-    summary_map = {
-        "probe": "目标探测成功",
-        "flash": "烧录成功",
-        "erase": "Flash 擦除成功",
-        "reset": f"复位成功（模式: {reset_mode}）",
-    }
-    summary = summary_map.get(action, "执行成功")
+    details = {"board": board, "interface": interface, "target": target, "elapsed_ms": elapsed_ms, "returncode": proc.returncode}
+    details.update({key: value for key, value in parsed.items() if key != "raw"})
+    summary = f"{action} 成功"
+    if action == "flash" and parsed.get("speed_kbps"):
+        summary = f"flash 成功，{parsed['bytes_written']} bytes @ {parsed['speed_kbps']} KiB/s"
+    elif action == "erase" and parsed.get("mode") == "mass":
+        summary = "erase 成功，整片擦除完成"
+    elif action == "erase" and parsed.get("mode") == "sector":
+        summary = f"erase 成功，sector {parsed.get('first_sector', 0)}-{parsed.get('last_sector', 'last')}"
 
-    # 补充 flash 摘要
-    if action == "flash" and "speed_kbps" in parsed:
-        summary = f"烧录成功，{parsed['bytes_written']} bytes @ {parsed['speed_kbps']} KiB/s"
-    elif action == "erase" and parsed.get("erased"):
-        if parsed.get("mode") == "mass":
-            summary = "Flash 整片擦除成功"
-        elif parsed.get("mode") == "sector":
-            summary = f"Flash 扇区擦除成功（bank {parsed.get('bank', bank or '0')}，sector {parsed.get('first_sector', 0)}-{parsed.get('last_sector', 'last')}）"
-
-    details = {
-        "elapsed_ms": elapsed_ms,
-        "returncode": proc.returncode,
-    }
-    if board:
-        details["board"] = board
-    if interface:
-        details["interface"] = interface
-    if target:
-        details["target"] = target
-
-    # 合并解析结果
-    for k, v in parsed.items():
-        if k != "raw":
-            details[k] = v
-
-    # 判断状态
-    if proc.returncode != 0 and "error_code" not in parsed:
-        # OpenOCD returncode 非零但没匹配到具体错误
+    status = "ok"
+    if proc.returncode != 0:
         if action == "flash" and parsed.get("verified"):
             status = "ok"
-        elif action == "probe":
-            # probe 有时 shutdown 后 returncode 非零但实际成功
-            if "jtag_tap" in parsed or "core" in parsed or "flash_size_bytes" in parsed:
-                status = "ok"
-            else:
-                status = "error"
-                summary = f"探测失败，返回码: {proc.returncode}"
+        elif action in ("probe", "targets") and (parsed.get("jtag_tap") or parsed.get("core")):
+            status = "ok"
         else:
             status = "error"
-            # 从输出中提取 Error 行作为补充信息
             error_lines = re.findall(r"Error:\s*(.+)", combined)
-            if error_lines:
-                summary = f"失败: {error_lines[-1].strip()}"
-            else:
-                summary = f"执行返回非零退出码: {proc.returncode}"
-    else:
-        status = "ok"
+            return {
+                "status": "error",
+                "action": action,
+                "error": {"code": "command_failed", "message": error_lines[-1].strip() if error_lines else f"执行返回非零退出码: {proc.returncode}"},
+                "details": details,
+            }
 
+    return {"status": status, "action": action, "summary": summary, "details": details}
+
+
+def _state_lookup(state: dict) -> dict:
+    last_build = get_state_entry(state, "last_build")
+    last_flash = get_state_entry(state, "last_flash")
+    last_debug = get_state_entry(state, "last_debug")
+    artifacts = last_build.get("artifacts", {})
     return {
-        "status": status,
-        "action": action,
-        "summary": summary,
-        "details": details,
+        "board": last_debug.get("board") or last_flash.get("board"),
+        "interface": last_debug.get("interface") or last_flash.get("interface"),
+        "target": last_debug.get("target") or last_flash.get("target"),
+        "search": last_debug.get("search"),
+        "adapter_speed": last_debug.get("adapter_speed") or last_flash.get("adapter_speed"),
+        "transport": last_debug.get("transport") or last_flash.get("transport"),
+        "flash_file": last_build.get("flash_file") or artifacts.get("flash_file"),
     }
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
-ALL_ACTIONS = ["probe", "flash", "erase", "reset"]
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="OpenOCD 探针探测/固件烧录/擦除/复位")
     parser.add_argument("action", choices=ALL_ACTIONS)
-    parser.add_argument("--exe", default="openocd", help="openocd 路径")
-    parser.add_argument("--board", default="", help="board 配置文件（如 board/stm32f4discovery.cfg）")
-    parser.add_argument("--interface", default="", help="interface 配置文件（如 interface/stlink.cfg）")
-    parser.add_argument("--target", default="", help="target 配置文件（如 target/stm32f4x.cfg）")
-    parser.add_argument("--search", default="", help="额外配置脚本搜索目录")
-    parser.add_argument("--adapter-speed", default="", help="调试速率 kHz")
-    parser.add_argument("--transport", default="", choices=["", "swd", "jtag"], help="传输协议")
-    parser.add_argument("--file", default="", help="固件文件路径（flash 用）")
-    parser.add_argument("--address", default="", help="烧录地址（flash .bin 用）")
-    parser.add_argument("--mode", default="run", choices=["halt", "run", "init", "auto", "mass", "sector"], help="reset 用于复位模式；erase 用于擦除模式")
-    parser.add_argument("--bank", default="", help="Flash bank 编号（erase 用，默认 0）")
+    parser.add_argument("--exe", default=None, help="openocd 路径")
+    parser.add_argument("--board", default=None, help="board 配置文件")
+    parser.add_argument("--interface", default=None, help="interface 配置文件")
+    parser.add_argument("--target", default=None, help="target 配置文件")
+    parser.add_argument("--search", default=None, help="额外配置脚本搜索目录")
+    parser.add_argument("--adapter-speed", default=None, help="调试速率 kHz")
+    parser.add_argument("--transport", default=None, choices=["", "swd", "jtag"], help="传输协议")
+    parser.add_argument("--file", default=None, help="固件文件路径（flash 用）")
+    parser.add_argument("--address", default=None, help="烧录地址（flash .bin 用）")
+    parser.add_argument("--mode", default="run", choices=["halt", "run", "init", "auto", "mass", "sector"], help="reset/erase 模式")
+    parser.add_argument("--bank", default=None, help="Flash bank 编号（erase 用，默认 0）")
+    parser.add_argument("--command", nargs="+", default=None, help="raw 模式下执行的 OpenOCD 命令列表")
+    parser.add_argument("--config", default=None, help="skill config.json 路径")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
-
     args = parser.parse_args()
 
-    # 文件存在检查
-    if args.action == "flash" and args.file and not os.path.isfile(args.file):
-        result = {
-            "status": "error",
-            "action": "flash",
-            "error": {"code": "file_not_found", "message": f"固件文件不存在: {args.file}"},
-        }
+    started_at = now_iso()
+    started_ts = time.time()
+    workspace = workspace_root(args.workspace)
+    config_path = normalize_path(args.config or str(default_config_path(__file__)))
+    config = load_json_file(config_path)
+    state = load_workspace_state(str(workspace))
+    state_lookup = _state_lookup(state)
+
+    parameter_sources: dict[str, str] = {}
+    try:
+        exe, parameter_sources["exe"] = resolve_param("exe", args.exe, config=config, config_keys=["exe"], required=True)
+        board, parameter_sources["board"] = resolve_param("board", args.board, config=config, config_keys=["default_board"], state_record=state_lookup, state_keys=["board"])
+        interface, parameter_sources["interface"] = resolve_param("interface", args.interface, config=config, config_keys=["default_interface"], state_record=state_lookup, state_keys=["interface"])
+        target, parameter_sources["target"] = resolve_param("target", args.target, config=config, config_keys=["default_target"], state_record=state_lookup, state_keys=["target"])
+        search, parameter_sources["search"] = resolve_param("search", args.search, config=config, config_keys=["scripts_dir"], state_record=state_lookup, state_keys=["search"])
+        adapter_speed, parameter_sources["adapter_speed"] = resolve_param("adapter_speed", args.adapter_speed, config=config, config_keys=["adapter_speed"], state_record=state_lookup, state_keys=["adapter_speed"])
+        transport, parameter_sources["transport"] = resolve_param("transport", args.transport, config=config, config_keys=["transport"], state_record=state_lookup, state_keys=["transport"])
+        file_path, parameter_sources["file"] = resolve_param("file", args.file, config=config, config_keys=["default_file"], state_record=state_lookup, state_keys=["flash_file"], normalize_as_path=True)
+    except ValueError as exc:
+        result = make_result(
+            status="error",
+            action=args.action,
+            summary=str(exc),
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "missing_param", "message": str(exc)},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
         if args.as_json:
             output_json(result)
         else:
-            print(f"错误: {result['error']['message']}", file=sys.stderr)
+            print(f"错误: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    result = run_openocd(
-        exe=args.exe,
+    if args.action == "raw" and int(config.get("operation_mode", 1)) >= 3:
+        message = "operation_mode=3 时禁止直接执行 raw 命令，请先切换模式或显式确认后再执行"
+        result = make_result(
+            status="error",
+            action="raw",
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "confirmation_required", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.action == "flash" and file_path and not os.path.isfile(file_path):
+        message = f"固件文件不存在: {file_path}"
+        result = make_result(
+            status="error",
+            action="flash",
+            summary=message,
+            details={},
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "file_not_found", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        sys.exit(1)
+
+    raw_result = run_openocd(
+        exe=exe,
         action=args.action,
-        board=args.board,
-        interface=args.interface,
-        target=args.target,
-        search=args.search,
-        adapter_speed=args.adapter_speed,
-        transport=args.transport,
-        file=args.file,
-        address=args.address,
+        board=board or "",
+        interface=interface or "",
+        target=target or "",
+        search=search or "",
+        adapter_speed=str(adapter_speed or ""),
+        transport=transport or "",
+        file=file_path or "",
+        address=args.address or "",
         reset_mode=args.mode if args.action == "reset" else "run",
-        bank=args.bank,
+        bank=args.bank or "",
         erase_mode=args.mode if args.action == "erase" else "auto",
+        raw_commands=args.command,
     )
+    elapsed_ms = (time.time() - started_ts) * 1000
+
+    if raw_result["status"] == "error":
+        result = make_result(
+            status="error",
+            action=args.action,
+            summary=raw_result["error"]["message"],
+            details=raw_result.get("details", {}),
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error=raw_result["error"],
+            timing=make_timing(started_at, elapsed_ms),
+        )
+    else:
+        details = raw_result.get("details", {})
+        artifacts = build_artifacts(flash_file=file_path, input_file=file_path)
+        metrics = {}
+        if "bytes_written" in details:
+            metrics["bytes_written"] = details["bytes_written"]
+        if "speed_kbps" in details:
+            metrics["speed_kbps"] = details["speed_kbps"]
+        state_info = None
+        if args.action == "flash":
+            state_info = update_state_entry(
+                "last_flash",
+                {
+                    "provider": "openocd",
+                    "action": "flash",
+                    "board": board or "",
+                    "interface": interface or "",
+                    "target": target or "",
+                    "search": search or "",
+                    "adapter_speed": adapter_speed or "",
+                    "transport": transport or "",
+                    "flash_file": file_path or "",
+                    "artifacts": artifacts,
+                },
+                str(workspace),
+            )
+        result = make_result(
+            status="ok",
+            action=args.action,
+            summary=raw_result["summary"],
+            details=details,
+            context=parameter_context(provider="openocd", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            artifacts=artifacts,
+            metrics=metrics,
+            state=state_info,
+            next_actions=["可继续复用 last_flash/last_debug 串联后续流程"] if args.action == "flash" else None,
+            timing=make_timing(started_at, elapsed_ms),
+        )
 
     if args.as_json:
         output_json(result)
+        return
+
+    if result["status"] == "ok":
+        print(f"[{args.action}] {result['summary']}")
     else:
-        if result["status"] == "ok":
-            print(f"[{args.action}] {result.get('summary', '成功')}")
-            details = result.get("details", {})
-            if "flash_size_bytes" in details:
-                print(f"  Flash: {details['flash_size_bytes']} bytes")
-            if "core" in details:
-                print(f"  Core: {details['core']}")
-            if "jtag_tap" in details:
-                print(f"  JTAG TAP: {details['jtag_tap']}")
-            if "verified" in details:
-                print(f"  校验: {'通过' if details['verified'] else '失败'}")
-            if details.get("mode") == "mass":
-                print("  擦除模式: mass")
-            elif details.get("mode") == "sector":
-                print(f"  擦除模式: sector (bank {details.get('bank', 0)}, sector {details.get('first_sector', 0)}-{details.get('last_sector', 'last')})")
-        else:
-            err = result.get("error", {})
-            print(f"[{args.action}] 失败 — {err.get('message', '未知错误')}", file=sys.stderr)
-            sys.exit(1)
+        print(f"[{args.action}] 失败 — {result['error']['message']}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

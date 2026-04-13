@@ -1,324 +1,469 @@
-"""GCC 嵌入式工程构建：configure / build / rebuild / clean"""
+"""GCC 嵌入式工程构建：configure / build / rebuild / clean。"""
+
+from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from gcc_runtime import (  # noqa: E402
+    build_artifacts,
+    default_config_path,
+    get_state_entry,
+    is_missing,
+    load_json_file,
+    load_workspace_state,
+    make_result,
+    make_timing,
+    normalize_path,
+    now_iso,
+    output_json,
+    parameter_context,
+    resolve_param,
+    update_state_entry,
+    workspace_root,
+)
+
+
 def _resolve_build_dir(project: Path, preset: str, presets_file: Path) -> Path:
-    """从 CMakePresets.json 解析 preset 对应的 binaryDir"""
     if presets_file.exists():
         data = json.loads(presets_file.read_text(encoding="utf-8"))
-        all_presets = {p["name"]: p for p in data.get("configurePresets", [])}
-        p = all_presets.get(preset, {})
-        binary_dir = p.get("binaryDir", "")
+        all_presets = {item["name"]: item for item in data.get("configurePresets", [])}
+        preset_item = all_presets.get(preset, {})
+        binary_dir = preset_item.get("binaryDir", "")
         if not binary_dir:
-            # 检查 inherits
-            inherits = p.get("inherits")
+            inherits = preset_item.get("inherits")
             if inherits and isinstance(inherits, str):
-                parent = all_presets.get(inherits, {})
-                binary_dir = parent.get("binaryDir", "")
+                binary_dir = all_presets.get(inherits, {}).get("binaryDir", "")
         if binary_dir:
             binary_dir = binary_dir.replace("${sourceDir}", str(project))
             binary_dir = binary_dir.replace("${presetName}", preset)
             return Path(binary_dir)
-    # 默认
     return project / "build" / preset
 
 
+def _resolve_workspace_path(workspace: Path, raw_path: str | None, default: str) -> str:
+    value = default if is_missing(raw_path) else str(raw_path)
+    path = Path(value)
+    return str(path.resolve() if path.is_absolute() else (workspace / path).resolve())
+
+
 def _find_elf(build_dir: Path, project_name: str) -> str:
-    """在构建目录中查找 .elf 文件，优先匹配项目名"""
     elfs = list(build_dir.glob("*.elf"))
     if not elfs:
         elfs = list(build_dir.rglob("*.elf"))
     if not elfs:
         return ""
-    # 优先匹配项目名
-    for e in elfs:
-        if e.stem.lower() == project_name.lower():
-            return str(e)
-    return str(elfs[0])
+    for file_path in elfs:
+        if file_path.stem.lower() == project_name.lower():
+            return str(file_path.resolve())
+    return str(elfs[0].resolve())
 
 
 def _parse_build_output(output: str) -> dict:
-    """从 GCC/Ninja 构建输出中提取错误/警告数量和内存使用"""
-    summary = {"errors": 0, "warnings": 0, "flash_bytes": 0, "ram_bytes": 0}
+    metrics = {"errors": 0, "warnings": 0, "flash_bytes": 0, "ram_bytes": 0}
+    metrics["errors"] = len(re.findall(r":\d+:\d+:\s+error:", output))
+    metrics["warnings"] = len(re.findall(r":\d+:\d+:\s+warning:", output))
 
-    # GCC 错误格式: path/file.c:123:45: error: message
-    errors = re.findall(r":\d+:\d+:\s+error:", output)
-    warnings = re.findall(r":\d+:\d+:\s+warning:", output)
-    summary["errors"] = len(errors)
-    summary["warnings"] = len(warnings)
-
-    # 链接器 --print-memory-usage 输出
-    # 格式：FLASH:  99328 B   1 MB   9.47%
-    for m in re.finditer(
-        r"(FLASH|RAM|CCMRAM)\s*:\s*([\d]+)\s*(B|KB|MB)",
-        output, re.IGNORECASE
-    ):
-        region = m.group(1).upper()
-        value = int(m.group(2))
-        unit = m.group(3).upper()
+    for match in re.finditer(r"(FLASH|RAM|CCMRAM)\s*:\s*([\d]+)\s*(B|KB|MB)", output, re.IGNORECASE):
+        region = match.group(1).upper()
+        value = int(match.group(2))
+        unit = match.group(3).upper()
         if unit == "KB":
             value *= 1024
         elif unit == "MB":
             value *= 1024 * 1024
         if region == "FLASH":
-            summary["flash_bytes"] = value
+            metrics["flash_bytes"] = value
         elif region == "RAM":
-            summary["ram_bytes"] = value
-
-    return summary
+            metrics["ram_bytes"] = value
+    return metrics
 
 
 def _extract_first_error(output: str) -> str:
-    """提取第一个 GCC 错误行"""
     for line in output.splitlines():
         if re.search(r":\d+:\d+:\s+error:", line):
-            # 去掉 Ninja 进度前缀 [x/y]
-            line = re.sub(r"^\[\d+/\d+\]\s*", "", line)
-            return line.strip()
+            return re.sub(r"^\[\d+/\d+\]\s*", "", line).strip()
     return ""
 
 
+def _error(action: str, code: str, message: str, details: dict | None = None) -> dict:
+    return {
+        "status": "error",
+        "action": action,
+        "error": {"code": code, "message": message},
+        "details": details or {},
+    }
+
+
+def _build_summary(action: str, status: str, metrics: dict | None = None) -> str:
+    metrics = metrics or {}
+    if action in ("build", "rebuild"):
+        return (
+            f"{action} {'成功' if status == 'ok' else '失败'}，"
+            f"errors={metrics.get('errors', 0)} warnings={metrics.get('warnings', 0)}"
+        )
+    if action == "configure":
+        return "configure 成功" if status == "ok" else "configure 失败"
+    return "clean 成功" if status == "ok" else "clean 失败"
+
+
 def run_configure(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
-    """执行 cmake --preset"""
     project_path = Path(project).resolve()
     if not (project_path / "CMakeLists.txt").exists():
-        return _error("configure", "project_not_found",
-                       f"CMakeLists.txt 不存在: {project_path}")
+        return _error("configure", "project_not_found", f"CMakeLists.txt 不存在: {project_path}")
 
     log_path = Path(log_dir).resolve()
     log_path.mkdir(parents=True, exist_ok=True)
     log_file = log_path / f"{project_path.name}-{preset}-configure.log"
 
-    cmd = [cmake_exe, "--preset", preset]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300,
-            cwd=str(project_path), encoding="utf-8", errors="replace",
+            [cmake_exe, "--preset", preset],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(project_path),
+            encoding="utf-8",
+            errors="replace",
         )
-        output = proc.stdout + "\n" + proc.stderr
-        log_file.write_text(output, encoding="utf-8")
-
-        if proc.returncode != 0:
-            return {
-                "status": "error",
-                "action": "configure",
-                "error": {"code": "configure_failed", "message": output.strip()[-500:]},
-                "details": {"project": str(project_path), "preset": preset,
-                            "log_file": str(log_file)},
-            }
-
-        return {
-            "status": "ok",
-            "action": "configure",
-            "summary": "配置完成",
-            "details": {"project": str(project_path), "preset": preset,
-                        "log_file": str(log_file)},
-        }
     except subprocess.TimeoutExpired:
         return _error("configure", "timeout", "cmake 配置超时(300s)")
     except FileNotFoundError:
         return _error("configure", "cmake_not_found", f"cmake 不存在: {cmake_exe}")
 
+    output = proc.stdout + "\n" + proc.stderr
+    log_file.write_text(output, encoding="utf-8")
+    if proc.returncode != 0:
+        return _error(
+            "configure",
+            "configure_failed",
+            output.strip()[-500:] or f"cmake configure 返回码: {proc.returncode}",
+            {"project": str(project_path), "preset": preset, "log_file": str(log_file.resolve())},
+        )
+    return {
+        "status": "ok",
+        "action": "configure",
+        "details": {
+            "project": str(project_path),
+            "preset": preset,
+            "log_file": str(log_file.resolve()),
+        },
+    }
+
 
 def run_build(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
-    """执行 cmake --build"""
     project_path = Path(project).resolve()
-    presets_file = project_path / "CMakePresets.json"
-    build_dir = _resolve_build_dir(project_path, preset, presets_file)
+    build_dir = _resolve_build_dir(project_path, preset, project_path / "CMakePresets.json")
 
-    # 检查是否已 configure
-    has_ninja = (build_dir / "build.ninja").exists()
-    has_makefile = (build_dir / "Makefile").exists()
-    if not has_ninja and not has_makefile:
-        return _error("build", "not_configured",
-                       f"构建目录不存在或未配置: {build_dir}，请先执行 configure")
+    if not (build_dir / "build.ninja").exists() and not (build_dir / "Makefile").exists():
+        return _error(
+            "build",
+            "not_configured",
+            f"构建目录不存在或未配置: {build_dir}，请先执行 configure",
+            {"project": str(project_path), "preset": preset, "build_dir": str(build_dir.resolve())},
+        )
 
     log_path = Path(log_dir).resolve()
     log_path.mkdir(parents=True, exist_ok=True)
     log_file = log_path / f"{project_path.name}-{preset}-build.log"
 
-    cmd = [cmake_exe, "--build", str(build_dir)]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600,
-            cwd=str(project_path), encoding="utf-8", errors="replace",
+            [cmake_exe, "--build", str(build_dir)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=str(project_path),
+            encoding="utf-8",
+            errors="replace",
         )
-        output = proc.stdout + "\n" + proc.stderr
-        log_file.write_text(output, encoding="utf-8")
-
-        summary = _parse_build_output(output)
-
-        if proc.returncode != 0 or summary["errors"] > 0:
-            first_err = _extract_first_error(output)
-            return {
-                "status": "error",
-                "action": "build",
-                "summary": summary,
-                "error": {"code": "build_failed",
-                          "message": first_err or f"构建失败，返回码: {proc.returncode}"},
-                "details": {
-                    "project": str(project_path), "preset": preset,
-                    "build_dir": str(build_dir), "log_file": str(log_file),
-                },
-            }
-
-        elf_file = _find_elf(build_dir, project_path.name)
-
-        return {
-            "status": "ok",
-            "action": "build",
-            "summary": summary,
-            "details": {
-                "project": str(project_path), "preset": preset,
-                "build_dir": str(build_dir), "elf_file": elf_file,
-                "log_file": str(log_file),
-            },
-        }
     except subprocess.TimeoutExpired:
         return _error("build", "timeout", "构建超时(600s)")
     except FileNotFoundError:
         return _error("build", "cmake_not_found", f"cmake 不存在: {cmake_exe}")
 
+    output = proc.stdout + "\n" + proc.stderr
+    log_file.write_text(output, encoding="utf-8")
+    metrics = _parse_build_output(output)
+
+    details = {
+        "project": str(project_path),
+        "preset": preset,
+        "build_dir": str(build_dir.resolve()),
+        "log_file": str(log_file.resolve()),
+    }
+    if proc.returncode != 0 or metrics["errors"] > 0:
+        return {
+            "status": "error",
+            "action": "build",
+            "metrics": metrics,
+            "error": {
+                "code": "build_failed",
+                "message": _extract_first_error(output) or f"构建失败，返回码: {proc.returncode}",
+            },
+            "details": details,
+        }
+
+    elf_file = _find_elf(build_dir, project_path.name)
+    if elf_file:
+        details["elf_file"] = elf_file
+        details["debug_file"] = elf_file
+        details["flash_file"] = elf_file
+
+    return {
+        "status": "ok",
+        "action": "build",
+        "metrics": metrics,
+        "details": details,
+    }
+
 
 def run_clean(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
-    """清理构建目录"""
     project_path = Path(project).resolve()
-    presets_file = project_path / "CMakePresets.json"
-    build_dir = _resolve_build_dir(project_path, preset, presets_file)
+    build_dir = _resolve_build_dir(project_path, preset, project_path / "CMakePresets.json")
 
     if not build_dir.exists():
         return {
             "status": "ok",
             "action": "clean",
-            "summary": "构建目录不存在，无需清理",
-            "details": {"project": str(project_path), "preset": preset,
-                        "build_dir": str(build_dir)},
+            "details": {
+                "project": str(project_path),
+                "preset": preset,
+                "build_dir": str(build_dir.resolve()),
+                "log_dir": str(Path(log_dir).resolve()),
+            },
         }
 
-    # 优先用 cmake --build --target clean
-    has_build_system = (build_dir / "build.ninja").exists() or \
-                       (build_dir / "Makefile").exists()
-    if has_build_system:
+    if (build_dir / "build.ninja").exists() or (build_dir / "Makefile").exists():
         try:
             proc = subprocess.run(
                 [cmake_exe, "--build", str(build_dir), "--target", "clean"],
-                capture_output=True, text=True, timeout=120,
-                encoding="utf-8", errors="replace",
+                capture_output=True,
+                text=True,
+                timeout=120,
+                encoding="utf-8",
+                errors="replace",
             )
             if proc.returncode == 0:
                 return {
                     "status": "ok",
                     "action": "clean",
-                    "summary": "清理完成（cmake --target clean）",
-                    "details": {"project": str(project_path), "preset": preset,
-                                "build_dir": str(build_dir)},
+                    "details": {
+                        "project": str(project_path),
+                        "preset": preset,
+                        "build_dir": str(build_dir.resolve()),
+                        "mode": "target-clean",
+                    },
                 }
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
-    # 回退：删除整个构建目录
     try:
         shutil.rmtree(str(build_dir))
-        return {
-            "status": "ok",
-            "action": "clean",
-            "summary": f"已删除构建目录: {build_dir}",
-            "details": {"project": str(project_path), "preset": preset,
-                        "build_dir": str(build_dir)},
-        }
-    except OSError as e:
-        return _error("clean", "clean_failed", f"删除构建目录失败: {e}")
+    except OSError as exc:
+        return _error("clean", "clean_failed", f"删除构建目录失败: {exc}")
+
+    return {
+        "status": "ok",
+        "action": "clean",
+        "details": {
+            "project": str(project_path),
+            "preset": preset,
+            "build_dir": str(build_dir.resolve()),
+            "mode": "remove-tree",
+        },
+    }
 
 
 def run_rebuild(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
-    """clean + configure + build"""
-    # clean
     result = run_clean(cmake_exe, project, preset, log_dir)
     if result["status"] == "error":
         result["action"] = "rebuild"
         return result
 
-    # configure
     result = run_configure(cmake_exe, project, preset, log_dir)
     if result["status"] == "error":
         result["action"] = "rebuild"
         return result
 
-    # build
     result = run_build(cmake_exe, project, preset, log_dir)
     result["action"] = "rebuild"
     return result
 
 
-def _error(action: str, code: str, message: str) -> dict:
-    return {
-        "status": "error",
-        "action": action,
-        "error": {"code": code, "message": message},
-    }
-
-
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="GCC 嵌入式工程构建")
     parser.add_argument("action", choices=["configure", "build", "rebuild", "clean"])
-    parser.add_argument("--cmake", default="cmake", help="cmake 可执行文件路径")
-    parser.add_argument("--project", required=True, help="工程根目录")
-    parser.add_argument("--preset", required=True, help="CMake preset 名称")
-    parser.add_argument("--log-dir", default=".build", help="日志输出目录")
+    parser.add_argument("--cmake", default=None, help="cmake 可执行文件路径")
+    parser.add_argument("--project", default=None, help="工程根目录")
+    parser.add_argument("--preset", default=None, help="CMake preset 名称")
+    parser.add_argument("--log-dir", default=None, help="日志输出目录")
+    parser.add_argument("--config", default=None, help="skill config.json 路径")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
-
     args = parser.parse_args()
 
-    actions = {
+    started_at = now_iso()
+    started_ts = time.time()
+    workspace = workspace_root(args.workspace)
+    config_path = normalize_path(args.config or str(default_config_path(__file__)))
+    config = load_json_file(config_path)
+    state = load_workspace_state(str(workspace))
+    last_build = get_state_entry(state, "last_build")
+
+    parameter_sources: dict[str, str] = {}
+    try:
+        cmake_exe, parameter_sources["cmake"] = resolve_param(
+            "cmake",
+            args.cmake,
+            config=config,
+            config_keys=["cmake_exe"],
+            required=True,
+        )
+        project, parameter_sources["project"] = resolve_param(
+            "project",
+            args.project,
+            config=config,
+            config_keys=["default_project"],
+            state_record=last_build,
+            state_keys=["project"],
+            required=True,
+            normalize_as_path=True,
+        )
+        preset, parameter_sources["preset"] = resolve_param(
+            "preset",
+            args.preset,
+            config=config,
+            config_keys=["default_preset"],
+            state_record=last_build,
+            state_keys=["preset"],
+            required=True,
+        )
+        log_dir = _resolve_workspace_path(workspace, args.log_dir or config.get("log_dir"), ".build")
+        parameter_sources["log_dir"] = "cli" if args.log_dir else ("config:log_dir" if config.get("log_dir") else "default")
+    except ValueError as exc:
+        result = make_result(
+            status="error",
+            action=args.action,
+            summary=str(exc),
+            details={},
+            context=parameter_context(
+                provider="gcc",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            error={"code": "missing_param", "message": str(exc)},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    action_map = {
         "configure": run_configure,
         "build": run_build,
         "rebuild": run_rebuild,
         "clean": run_clean,
     }
+    raw_result = action_map[args.action](cmake_exe=cmake_exe, project=project, preset=preset, log_dir=log_dir)
+    elapsed_ms = (time.time() - started_ts) * 1000
 
-    result = actions[args.action](
-        cmake_exe=args.cmake,
-        project=args.project,
-        preset=args.preset,
-        log_dir=args.log_dir,
-    )
+    if raw_result["status"] == "error":
+        result = make_result(
+            status="error",
+            action=raw_result["action"],
+            summary=raw_result["error"]["message"],
+            details=raw_result.get("details", {}),
+            context=parameter_context(
+                provider="gcc",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            metrics=raw_result.get("metrics", {}),
+            error=raw_result["error"],
+            timing=make_timing(started_at, elapsed_ms),
+        )
+    else:
+        details = raw_result.get("details", {})
+        artifacts = build_artifacts(
+            build_dir=details.get("build_dir"),
+            elf_file=details.get("elf_file"),
+            debug_file=details.get("debug_file"),
+            flash_file=details.get("flash_file"),
+            log_file=details.get("log_file"),
+        )
+        metrics = raw_result.get("metrics", {})
+        state_info = None
+        if args.action in ("build", "rebuild") and raw_result["status"] == "ok":
+            state_info = update_state_entry(
+                "last_build",
+                {
+                    "provider": "gcc",
+                    "action": args.action,
+                    "project": project,
+                    "preset": preset,
+                    "log_dir": log_dir,
+                    "artifacts": artifacts,
+                    **artifacts,
+                },
+                str(workspace),
+            )
+        summary = _build_summary(args.action, raw_result["status"], metrics)
+        next_actions = []
+        if artifacts.get("flash_file"):
+            next_actions.append("可直接复用 artifacts.flash_file 继续 flash")
+        if artifacts.get("debug_file"):
+            next_actions.append("可直接复用 artifacts.debug_file 继续 gdb 调试")
+
+        result = make_result(
+            status=raw_result["status"],
+            action=raw_result["action"],
+            summary=summary,
+            details=details,
+            context=parameter_context(
+                provider="gcc",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            artifacts=artifacts,
+            metrics=metrics,
+            state=state_info,
+            next_actions=next_actions,
+            timing=make_timing(started_at, elapsed_ms),
+        )
 
     if args.as_json:
         output_json(result)
+        return
+
+    if result["status"] == "ok":
+        print(f"[{args.action}] {result['summary']}")
+        if result.get("artifacts", {}).get("log_file"):
+            print(f"  日志: {result['artifacts']['log_file']}")
+        if result.get("artifacts", {}).get("elf_file"):
+            print(f"  ELF: {result['artifacts']['elf_file']}")
     else:
-        if result["status"] == "ok":
-            s = result.get("summary", "")
-            if isinstance(s, dict):
-                print(f"[{args.action}] 成功 — errors: {s.get('errors',0)}, warnings: {s.get('warnings',0)}")
-                if s.get("flash_bytes"):
-                    print(f"  Flash: {s['flash_bytes']} bytes, RAM: {s['ram_bytes']} bytes")
-            else:
-                print(f"[{args.action}] {s}")
-            details = result.get("details", {})
-            if "log_file" in details:
-                print(f"  日志: {details['log_file']}")
-            if "elf_file" in details and details["elf_file"]:
-                print(f"  ELF: {details['elf_file']}")
-        else:
-            err = result.get("error", {})
-            print(f"[{args.action}] 失败 — {err.get('message', '未知错误')}", file=sys.stderr)
-            details = result.get("details", {})
-            if "log_file" in details:
-                print(f"  日志: {details['log_file']}", file=sys.stderr)
-            sys.exit(1)
+        error = result.get("error", {})
+        print(f"[{args.action}] 失败 — {error.get('message', result['summary'])}", file=sys.stderr)
+        if result.get("details", {}).get("log_file"):
+            print(f"  日志: {result['details']['log_file']}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
