@@ -6,6 +6,35 @@
 
 一套开源的嵌入式开发调试 Skill 集合，适用于 Claude Code、Copilot、TRAE 及其他支持 Skill 协议的 AI 编码助手。安装后，AI 助手即可直接操控编译器、调试器和通信总线，实现从代码编写到硬件验证的全流程自动化。
 
+## 核心原理
+
+本工具集的核心思路是：**将嵌入式工具链的命令行能力封装为 AI 可理解、可调用的 Skill 接口**。
+
+- **封装命令行工具为 Skill** — 每个 Skill 本质上是一组 Python 脚本，它们对底层命令行工具（如 UV4.exe、cmake、JLink.exe、openocd、tshark 等）进行封装，将复杂的命令行参数和交互流程转化为结构化的子命令接口
+- **通过 SKILL.md 暴露给 AI** — 每个 Skill 目录下的 `SKILL.md` 文件以自然语言描述该 Skill 的能力、子命令、参数和使用场景，AI 助手通过读取该文件即可理解并正确调用对应功能
+- **统一 JSON 输出供 AI 解析** — 所有脚本的执行结果均以统一的 JSON 格式返回（包括状态、摘要、详情、产物路径、下一步建议等），AI 可直接解析结果并据此决策下一步操作
+
+这一设计使 AI 不仅能编写代码，还能**自主调用编译器编译、通过调试器烧录和调试、借助串口/CAN/网络读取运行数据**，从而独立完成完整的嵌入式开发-调试闭环。
+
+## 核心特性：自动编排 + 灵活组合
+
+本工具集提供两种互补的使用方式：
+
+- **自动编排（workflow）** — `workflow` 作为主 Skill，能够自动扫描当前项目类型（Keil / GCC），发现可用的调试工具（J-Link / OpenOCD）和通信接口（串口 / CAN / 网络），自动选择并协调相应的子 Skill 完成编译→烧录→调试→观测的完整流程，开箱即用
+- **手动选择** — 每个 Skill 都可以独立使用，用户可根据具体的项目需求和现有工具链，手动指定某个 Skill 单独执行特定任务（例如只用 `jlink flash` 烧录，或只用 `serial monitor` 监控串口）
+
+```
+自动编排模式：                        手动选择模式：
+
+workflow                              用户 / AI 直接调用
+  ├─ 识别工程 → keil 或 gcc 编译        ├─ keil build
+  ├─ 选择工具 → jlink 或 openocd 烧录   ├─ jlink flash
+  ├─ 选择通道 → serial / can / net 观测  ├─ serial monitor
+  └─ 聚合结果 → 决策下一步               └─ ...
+```
+
+这种设计的优势在于：**既提供了开箱即用的自动化工作流（适合完整的开发-调试循环），又保留了针对特定场景的灵活配置能力（适合只需执行某个环节的情况）**。AI 助手可以根据任务复杂度自行选择——复杂任务用 workflow 自动编排，简单操作直接调用对应 Skill。
+
 ## 为什么需要这套工具？
 
 ### 现状：AI 只能帮你写一半
@@ -97,82 +126,22 @@ flowchart LR
 | 错误修正 | ❌ 人工转述给 AI | ✅ AI 自主读取并修正 |
 | **开发闭环** | **❌ 人在回路** | **✅ AI 自主闭环** |
 
-## 架构总览
-
-```mermaid
-graph TB
-    AI["🤖 AI 编码助手<br/>(Claude Code / Copilot / TRAE)"]
-
-    subgraph skills["embeddedskills 工具集"]
-        direction LR
-        subgraph build["构建层"]
-            keil["keil<br/>Keil MDK 编译"]
-            gcc["gcc<br/>CMake GCC 编译"]
-        end
-        workflow["workflow<br/>自动编排"]
-        subgraph flash["烧录层"]
-            jlink["jlink<br/>J-Link 调试"]
-            openocd["openocd<br/>OpenOCD 调试"]
-        end
-        subgraph comm["通信层"]
-            serial["serial<br/>串口调试"]
-            can["can<br/>CAN 总线"]
-            net["net<br/>网络调试"]
-        end
-    end
-
-    subgraph hw["硬件目标"]
-        MCU["🔌 MCU / SoC"]
-    end
-
-    AI --> workflow
-    workflow --> build
-    workflow --> flash
-    AI --> skills
-    build --> flash
-    flash --> hw
-    comm --> hw
-
-    style AI fill:#9C27B0,color:#fff
-    style skills fill:#F5F5F5,stroke:#999
-    style build fill:#E3F2FD,stroke:#2196F3
-    style flash fill:#FFF3E0,stroke:#FF9800
-    style comm fill:#E8F5E9,stroke:#4CAF50
-    style hw fill:#FFEBEE,stroke:#F44336
-```
-
 ## Skill 一览
 
-## 二维分类
+| 分类 | Skill | 用途 | 子命令 |
+|------|-------|------|--------|
+| **构建** | **keil** | Keil MDK 工程扫描、Target 枚举、编译、重建、清理 | `scan` `targets` `build` `rebuild` `clean` `flash` |
+| | **gcc** | CMake 型 GCC 嵌入式工程扫描、preset 枚举、配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
+| **调试** | **jlink** | J-Link 烧录、读写内存/寄存器、RTT/SWO、在线调试、GDB 调试 | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `swo` `halt` `go` `step` `run-to` + GDB 子命令 |
+| | **openocd** | OpenOCD 烧录、擦除、底层查询、GDB/Telnet 调试、Semihosting/ITM | `probe` `flash` `erase` `reset` `reset-init` `targets` `raw` + GDB 子命令 `semihosting` `itm` |
+| **通信** | **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
+| | **can** | CAN/CAN-FD 接口扫描、监控、发帧、DBC 解码、统计 | `scan` `monitor` `send` `log` `decode` `stats` |
+| | **net** | 抓包、pcap 分析、连通性测试、端口扫描、流量统计 | `iface` `capture` `analyze` `ping` `scan` `stats` |
+| **编排** | **workflow** | 发现工程、选择后端、串联 workspace 状态、聚合结果 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
 
-### 按工程类型分类
-
-| 类别 | 识别方式 | 主职责 |
-|------|----------|--------|
-| **Keil 工程** | 识别 `.uvprojx/.uvmpw` 工程文件（等价于识别 `.keil` 工程） | 工程扫描、Target 枚举、构建 |
-| **GCC 工程** | 识别 `CMakeLists.txt` + `CMakePresets.json` / 工具链文件的嵌入式 CMake 工程 | preset 枚举、configure、build、size |
-
-> 当前 `gcc` skill 明确面向 **CMake 型 arm-none-eabi-gcc 工程**，不包含纯 Makefile 工程。
-
-### 按调试工具分类
-
-| 类别 | 主职责 | 输入依赖 |
-|------|--------|----------|
-| **J-Link** | 烧录、寄存器/内存访问、RTT/SWO、在线调试、GDB 调试 | 固件路径 + 芯片/接口参数 |
-| **OpenOCD** | 烧录、擦除、复位、Telnet/GDB 调试、Semihosting/ITM | 固件路径 + board/interface/target 参数 |
-
-这两套分类是正交的。`Keil -> J-Link`、`Keil -> OpenOCD`、`GCC -> J-Link`、`GCC -> OpenOCD` 都允许成立。构建层负责产出固件路径，调试层负责烧录和在线调试。
-
-| Skill | 用途 | 子命令 |
-|-------|------|--------|
-| **keil** | Keil MDK 工程扫描、Target 枚举、编译、重建、清理，`flash` 作为兼容入口保留 | `scan` `targets` `build` `rebuild` `clean` `flash` |
-| **gcc** | CMake 型 GCC 嵌入式工程扫描、preset 枚举、配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `clean` `size` |
-| **jlink** | J-Link 烧录、读写内存、寄存器、RTT/SWO、在线调试、one-shot GDB | `info` `flash` `read-mem` `write-mem` `regs` `reset` `rtt` `swo` `halt` `go` `step` `run-to` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` |
-| **openocd** | OpenOCD 烧录、擦除、底层查询、GDB/Telnet 调试、Semihosting/ITM | `probe` `flash` `erase` `reset` `reset-init` `targets` `flash-banks` `adapter-info` `raw` `gdb server` `gdb backtrace` `gdb locals` `gdb break` `gdb continue` `gdb next` `gdb step` `gdb finish` `gdb until` `gdb frame` `gdb print` `gdb watch` `gdb disassemble` `gdb threads` `gdb crash-report` `semihosting` `itm` |
-| **workflow** | 发现工程、选择后端、串联 workspace 状态、聚合结果 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
-| **serial** | 串口扫描、实时监控、数据发送、Hex 查看、日志 | `scan` `monitor` `send` `hex` `log` |
-| **can** | CAN/CAN-FD 接口扫描、监控、发帧、DBC 解码 | `scan` `monitor` `send` `log` `decode` `stats` |
-| **net** | 抓包、pcap 分析、连通性测试、端口扫描 | `iface` `capture` `analyze` `ping` `scan` `stats` |
+> **构建与调试正交组合**：`Keil → J-Link`、`Keil → OpenOCD`、`GCC → J-Link`、`GCC → OpenOCD` 均可成立。构建层产出固件路径，调试层负责烧录和在线调试。
+>
+> `gcc` skill 当前面向 **CMake 型 arm-none-eabi-gcc 工程**，不包含纯 Makefile 工程。
 
 ## 安装
 
@@ -228,85 +197,7 @@ cp config.example.json config.json
 | can | `pip install python-can cantools pyserial` + USB-CAN 驱动 |
 | net | Wireshark (tshark), Npcap |
 
-## 各 Skill 详细介绍
 
-### keil — Keil MDK 编译构建
-
-扫描 `.uvprojx` / `.uvmpw` 工程文件，枚举 Target，执行增量编译 / 全量重建 / 清理，并解析构建日志提取错误数、警告数、代码尺寸等信息。构建结果会尽量返回 `flash_file` / `debug_file` 等产物路径，便于后续交给 J-Link 或 OpenOCD。`flash` 子命令保留为兼容入口，不作为推荐的主路径。
-
-**实现方式：** Python 脚本调用 UV4.exe 命令行，解析返回码、构建日志和工程输出目录。仅在 build 无错误时允许 flash。
-
----
-
-### gcc — CMake 型 GCC 嵌入式构建
-
-扫描带 `CMakeLists.txt` 且包含 `CMakePresets.json` 或嵌入式工具链文件的工程，枚举 preset，执行 configure / build / rebuild / clean，并分析 ELF 大小。构建结果返回 `elf_file`，可直接交给 J-Link 或 OpenOCD 做后续调试。
-
-**实现方式：** Python 脚本调用 `cmake --preset` / `cmake --build` / `arm-none-eabi-size`，解析日志、构建目录和 ELF 产物。
-
----
-
-### jlink — J-Link 探针调试
-
-**基础操作：** 探针检测 (`info`)、固件烧录 (`flash`)、内存读写 (`read-mem` / `write-mem`)、寄存器查看 (`regs`)、目标复位 (`reset`)、RTT 日志 (`rtt`)
-
-**轻量调试：** 暂停 (`halt`) / 恢复 (`go`) / 单步 (`step`) / 断点运行 (`run-to`)
-
-**GDB 源码级调试：** 支持 `backtrace / locals / break / continue / next / step / finish / until / frame / print / watch / disassemble / threads / crash-report`
-
-**观测通道：** RTT (`rtt`) 与可插拔 SWO 包装层 (`swo`)
-
-**实现方式：**
-- `jlink_exec.py` — 生成 `.jlink` 命令脚本交由 JLink.exe 执行
-- `jlink_rtt.py` — 启动 JLinkGDBServerCL + JLinkRTTClient 读取 RTT 输出
-- `jlink_gdb.py` — 启动 GDB Server 后用 arm-none-eabi-gdb 执行统一 one-shot 调试子命令
-- `jlink_swo.py` — 对外部 SWO viewer 做统一事件流包装
-
----
-
-### openocd — OpenOCD 调试烧录
-
-探针探测 (`probe`)、固件烧录 (`flash`)、Flash 擦除 (`erase`)、目标复位 (`reset` / `reset-init`)、底层查询 (`targets` / `flash-banks` / `adapter-info` / `raw`)、统一 GDB 子命令、Semihosting 与 ITM 观测。
-
-**实现方式：** Python 脚本拼接 OpenOCD 命令行参数并执行，支持 board 配置优先于 interface + target 组合。GDB 调试使用统一 one-shot 命令集；观测层新增 `openocd_itm.py` 以复用官方 TPIU/ITM 命令。
-
-**支持的调试器：** ST-Link V2/V3, CMSIS-DAP, DAPLink, J-Link, FTDI
-
----
-
-### serial — 串口调试
-
-扫描可用串口 (`scan`)、实时文本监控 (`monitor`)、发送文本/Hex 数据 (`send`)、二进制 Hex 查看 (`hex`)、日志记录 (`log`)。
-
-**实现方式：** 基于 pyserial 的 5 个独立脚本，流式命令使用 JSON Lines 格式输出。支持正则过滤、多种日志格式 (text/csv/json)。内置 USB 转串口芯片 VID/PID 映射 (CH340, CP2102, FT232, PL2303 等)。
-
----
-
-### can — CAN 总线调试
-
-接口扫描 (`scan`)、实时监控 (`monitor`)、帧发送 (`send`)、流量记录 (`log`)、DBC/ARXML/KCD 数据库解码 (`decode`)、总线统计 (`stats`)。
-
-**实现方式：** 基于 python-can + cantools 的 6 个脚本，支持 PCAN、Vector、IXXAT、Kvaser、slcan、socketcan、gs_usb、virtual 多种后端。
-
----
-
-### net — 网络调试
-
-接口发现 (`iface`)、实时抓包 (`capture`)、离线 pcap 分析 (`analyze`)、连通性测试 (`ping`)、端口扫描 (`scan`)、流量统计 (`stats`)。
-
-**实现方式：** 基于 tshark / capinfos 的 6 个脚本。端口扫描默认覆盖嵌入式常用端口 (Modbus TCP, MQTT, CoAP, OPC UA, S7comm, BACnet, EtherNet/IP 等)。
-
----
-
-### workflow — 自动编排
-
-发现当前 workspace 中的 Keil / GCC 工程，选择 build/flash/debug/observe 后端，并通过 `.embeddedskills/state.json` 串联最近一次构建、烧录、调试、观测结果。
-
-**实现方式：**
-- `workflow_plan.py` — 发现工程、候选后端和最近状态
-- `workflow_run.py` — 薄编排入口，调用现有 skill 脚本并聚合结果
-
----
 
 ## 通用架构
 
@@ -379,9 +270,9 @@ cp config.example.json config.json
 | workflow | 🔧 待测试 |
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |
-| openocd | 🔧 待测试 |
+| openocd | ✅ 待测试 |
 | can | 🔧 待测试 |
 
 ## License
 
-MIT
+此项目根据 MIT 许可证授权 - 有关详细信息，请参阅 [LICENSE](LICENSE) 文件。
