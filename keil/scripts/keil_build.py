@@ -20,6 +20,7 @@ from keil_runtime import (  # noqa: E402
     build_artifacts,
     default_config_path,
     get_state_entry,
+    hidden_subprocess_kwargs,
     is_missing,
     load_json_file,
     load_local_config,
@@ -355,6 +356,7 @@ def run_uv4(uv4_exe: str, action: str, project: str, target: str, log_dir: str, 
             cwd=str(project_path.parent),
             encoding="utf-8",
             errors="replace",
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return {
@@ -445,6 +447,7 @@ def main() -> None:
             config_keys=["uv4_exe"],
             required=True,
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         
         # project: CLI > 环境级配置 > 工程级配置 > state.json > 必需
@@ -454,6 +457,7 @@ def main() -> None:
             config=local_config,
             config_keys=["default_project"],
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         # 工程级配置（优先于 state）
         if is_missing(project) and not is_missing(project_config.get("project")):

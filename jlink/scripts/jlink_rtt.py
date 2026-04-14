@@ -21,6 +21,7 @@ from jlink_runtime import (  # noqa: E402
     default_config_path,
     emit_stream_record,
     get_state_entry,
+    hidden_subprocess_kwargs,
     is_missing,
     load_json_file,
     load_local_config,
@@ -71,7 +72,7 @@ def start_gdbserver(
         text=True,
         encoding="utf-8",
         errors="replace",
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        **hidden_subprocess_kwargs(new_process_group=True),
     )
 
 
@@ -105,6 +106,7 @@ def start_rtt_client(rtt_exe: str, rtt_port: int = 19021) -> subprocess.Popen:
         text=True,
         encoding="utf-8",
         errors="replace",
+        **hidden_subprocess_kwargs(),
     )
 
 
@@ -130,6 +132,7 @@ def cleanup(procs: list[subprocess.Popen]) -> None:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    **hidden_subprocess_kwargs(),
                 )
             else:
                 proc.kill()
@@ -251,6 +254,7 @@ def main() -> None:
             config_keys=["gdbserver_exe"],
             required=True,
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         rtt_exe, parameter_sources["rtt_exe"] = resolve_param(
             "rtt_exe",
@@ -259,6 +263,7 @@ def main() -> None:
             config_keys=["rtt_exe"],
             required=True,
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         interface = dev_params["interface"]
         parameter_sources["interface"] = dev_params["interface_source"]

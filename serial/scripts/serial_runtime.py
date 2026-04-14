@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -81,18 +82,20 @@ def load_workspace_state(workspace: str | None = None) -> dict:
 
 def save_workspace_state(state: dict, workspace: str | None = None) -> Path:
     """保存状态"""
-    file_path = workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME
-    save_json_file(file_path, state)
+    ws = workspace_root(workspace)
+    file_path = ws / STATE_DIR_NAME / STATE_FILE_NAME
+    save_json_file(file_path, _serialize_state_value(state, ws))
     return file_path
 
 
 def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
     """更新状态条目"""
+    ws = workspace_root(workspace)
     state = load_workspace_state(workspace)
-    state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
+    state[category] = _serialize_state_value({**record, "timestamp": record.get("timestamp") or now_iso()}, ws)
     file_path = save_workspace_state(state, workspace)
     return {
-        "workspace": str(workspace_root(workspace)),
+        "workspace": str(ws),
         "file": str(file_path),
         "updated_keys": [category],
         category: state[category],
@@ -107,6 +110,23 @@ def normalize_path(value: str | None, base: str | Path | None = None) -> str:
     if base and not path.is_absolute():
         path = Path(base) / path
     return str(path.resolve()) if path.is_absolute() else str(path)
+
+
+def _serialize_state_value(value: Any, workspace: Path) -> Any:
+    if isinstance(value, dict):
+        return {key: _serialize_state_value(item, workspace) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_serialize_state_value(item, workspace) for item in value]
+    if not isinstance(value, str) or "://" in value:
+        return value
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return value
+    try:
+        return Path(os.path.relpath(path.resolve(), workspace)).as_posix()
+    except ValueError:
+        return value
 
 
 def _first_resolved(mapping: dict, keys: list[str]) -> tuple[Any, str | None]:

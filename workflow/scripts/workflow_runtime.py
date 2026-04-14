@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -150,6 +152,36 @@ def normalize_path(value: str | None) -> str:
     return str(Path(str(value)).expanduser().resolve())
 
 
+def _serialize_state_value(value: Any, workspace: Path) -> Any:
+    if isinstance(value, dict):
+        return {key: _serialize_state_value(item, workspace) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_serialize_state_value(item, workspace) for item in value]
+    if not isinstance(value, str) or "://" in value:
+        return value
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return value
+    try:
+        return Path(os.path.relpath(path.resolve(), workspace)).as_posix()
+    except ValueError:
+        return value
+
+
+def hidden_subprocess_kwargs() -> dict:
+    if sys.platform != "win32":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        "startupinfo": startupinfo,
+    }
+
+
 def load_json_file(path: str | Path) -> dict:
     file_path = Path(path)
     if not file_path.exists():
@@ -177,17 +209,19 @@ def load_workspace_state(workspace: str | None = None) -> dict:
 
 
 def save_workspace_state(state: dict, workspace: str | None = None) -> Path:
-    file_path = workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME
-    save_json_file(file_path, state)
+    ws = workspace_root(workspace)
+    file_path = ws / STATE_DIR_NAME / STATE_FILE_NAME
+    save_json_file(file_path, _serialize_state_value(state, ws))
     return file_path
 
 
 def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
+    ws = workspace_root(workspace)
     state = load_workspace_state(workspace)
-    state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
+    state[category] = _serialize_state_value({**record, "timestamp": record.get("timestamp") or now_iso()}, ws)
     file_path = save_workspace_state(state, workspace)
     return {
-        "workspace": str(workspace_root(workspace)),
+        "workspace": str(ws),
         "file": str(file_path),
         "updated_keys": [category],
         category: state[category],

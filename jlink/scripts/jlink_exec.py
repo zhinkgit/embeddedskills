@@ -24,6 +24,7 @@ from jlink_runtime import (
     update_state_entry,
     workspace_root,
     normalize_path,
+    hidden_subprocess_kwargs,
     is_missing,
 )
 
@@ -236,7 +237,8 @@ def run_jlink(exe: str, device: str, action: str, interface: str = "SWD",
 
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace"
+                cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
+                **hidden_subprocess_kwargs()
             )
         except subprocess.TimeoutExpired:
             return {

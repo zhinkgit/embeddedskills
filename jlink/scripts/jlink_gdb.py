@@ -21,6 +21,7 @@ from jlink_runtime import (  # noqa: E402
     build_artifacts,
     default_config_path,
     get_state_entry,
+    hidden_subprocess_kwargs,
     is_missing,
     load_json_file,
     load_local_config,
@@ -100,7 +101,7 @@ def start_gdbserver(
         text=True,
         encoding="utf-8",
         errors="replace",
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        **hidden_subprocess_kwargs(new_process_group=True),
     )
     return proc, gdb_port
 
@@ -286,6 +287,7 @@ def main() -> None:
             config_keys=["gdbserver_exe"],
             required=True,
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         gdb_exe, parameter_sources["gdb_exe"] = resolve_param(
             "gdb_exe",
@@ -294,6 +296,7 @@ def main() -> None:
             config_keys=["gdb_exe"],
             required=True,
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         # device 从工程配置或 state 解析
         device = dev_params["device"]
@@ -309,6 +312,7 @@ def main() -> None:
             state_record=state_lookup,
             state_keys=["elf_file", "debug_file"],
             normalize_as_path=True,
+            workspace=str(workspace),
         )
         interface = dev_params["interface"]
         parameter_sources["interface"] = dev_params["interface_source"]

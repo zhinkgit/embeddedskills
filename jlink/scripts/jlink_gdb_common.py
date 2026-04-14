@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from jlink_runtime import hidden_subprocess_kwargs
+
 
 INTROSPECTION_ACTIONS = {
     "backtrace",
@@ -37,6 +39,7 @@ def run_gdb_commands(gdb_exe: str, elf_file: str, target_remote: str, commands: 
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            **hidden_subprocess_kwargs(),
         )
         combined_output = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
         critical_patterns = [

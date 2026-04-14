@@ -16,6 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from workflow_runtime import (  # noqa: E402
     get_state_entry,
+    hidden_subprocess_kwargs,
     load_effective_project_config,
     load_workspace_state,
     make_result,
@@ -39,6 +40,33 @@ def _with_backend(result: dict, backend: str) -> dict:
     return result
 
 
+def _workflow_state_key(action: str) -> str:
+    return f"last_workflow_{action.replace('-', '_')}"
+
+
+def _workflow_state_details(action: str, result: dict) -> dict:
+    details = result.get("details") or {}
+    if action in ("build", "observe"):
+        return {"backend": details.get("backend"), "summary": result.get("summary", "")}
+    if action == "build-flash":
+        build = details.get("build") or {}
+        flash = details.get("flash") or {}
+        return {
+            "summary": result.get("summary", ""),
+            "build_backend": (build.get("details") or {}).get("backend"),
+            "flash_backend": (flash.get("details") or {}).get("backend"),
+        }
+    if action == "build-debug":
+        build = details.get("build") or {}
+        debug = details.get("debug") or {}
+        return {
+            "summary": result.get("summary", ""),
+            "build_backend": (build.get("details") or {}).get("backend"),
+            "debug_backend": (debug.get("details") or {}).get("backend"),
+        }
+    return {"summary": result.get("summary", "")}
+
+
 def discover_projects(root: Path) -> dict:
     return {
         "keil": sorted(str(path.resolve()) for path in root.rglob("*.uvprojx")),
@@ -55,7 +83,15 @@ def _single_or_error(items: list[str], label: str) -> tuple[str | None, dict | N
 
 
 def run_json(cmd: list[str], workdir: Path) -> dict:
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(workdir), encoding="utf-8", errors="replace")
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(workdir),
+        encoding="utf-8",
+        errors="replace",
+        **hidden_subprocess_kwargs(),
+    )
     payload = (proc.stdout or proc.stderr).strip()
     try:
         return json.loads(payload)
@@ -394,15 +430,16 @@ def main() -> None:
     if used_backends:
         save_project_config(str(workspace), used_backends)
 
-    # 更新运行状态到 state.json
+    # 更新 workflow 自己的运行状态到 state.json，避免覆盖底层 skill 的 last_build/last_flash/last_debug/last_observe
     if result.get("status") == "ok" and args.action in ("build", "build-flash", "build-debug", "observe"):
         state_record = {
             "action": args.action,
             "timestamp": now_iso(),
         }
-        if result.get("details"):
-            state_record["details"] = result["details"]
-        update_state_entry(f"last_{args.action.replace('-', '_')}", state_record, str(workspace))
+        state_details = _workflow_state_details(args.action, result)
+        if state_details:
+            state_record["details"] = state_details
+        update_state_entry(_workflow_state_key(args.action), state_record, str(workspace))
 
     wrapped = make_result(
         status=result.get("status", "error"),

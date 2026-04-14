@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -100,6 +102,49 @@ def normalize_path(value: str | None) -> str:
     return str(Path(str(value)).expanduser().resolve())
 
 
+def normalize_path_with_base(value: str | None, base: str | Path | None = None) -> str:
+    if is_missing(value):
+        return ""
+    path = Path(str(value)).expanduser()
+    if base and not path.is_absolute():
+        path = Path(base) / path
+    return str(path.resolve())
+
+
+def _serialize_state_value(value: Any, workspace: Path) -> Any:
+    if isinstance(value, dict):
+        return {key: _serialize_state_value(item, workspace) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_serialize_state_value(item, workspace) for item in value]
+    if not isinstance(value, str) or "://" in value:
+        return value
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return value
+    try:
+        return Path(os.path.relpath(path.resolve(), workspace)).as_posix()
+    except ValueError:
+        return value
+
+
+def hidden_subprocess_kwargs(*, new_process_group: bool = False) -> dict:
+    if sys.platform != "win32":
+        return {}
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if new_process_group:
+        creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return {
+        "creationflags": creationflags,
+        "startupinfo": startupinfo,
+    }
+
+
 def load_json_file(path: str | Path) -> dict:
     file_path = Path(path)
     if not file_path.exists():
@@ -127,8 +172,9 @@ def load_workspace_state(workspace: str | None = None) -> dict:
 
 
 def save_workspace_state(state: dict, workspace: str | None = None) -> Path:
-    file_path = workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME
-    save_json_file(file_path, state)
+    ws_root = workspace_root(workspace)
+    file_path = ws_root / STATE_DIR_NAME / STATE_FILE_NAME
+    save_json_file(file_path, _serialize_state_value(state, ws_root))
     return file_path
 
 
@@ -140,11 +186,12 @@ def get_state_entry(state: dict | None, key: str) -> dict:
 
 
 def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
+    ws_root = workspace_root(workspace)
     state = load_workspace_state(workspace)
-    state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
+    state[category] = _serialize_state_value({**record, "timestamp": record.get("timestamp") or now_iso()}, ws_root)
     file_path = save_workspace_state(state, workspace)
     return {
-        "workspace": str(workspace_root(workspace)),
+        "workspace": str(ws_root),
         "file": str(file_path),
         "updated_keys": [category],
         category: state[category],
@@ -169,6 +216,7 @@ def resolve_param(
     state_keys: list[str] | None = None,
     required: bool = False,
     normalize_as_path: bool = False,
+    workspace: str | None = None,
 ) -> tuple[Any, str]:
     if not is_missing(cli_value):
         value = cli_value
@@ -185,7 +233,7 @@ def resolve_param(
             if not is_missing(value):
                 source = f"state:{state_key}"
     if normalize_as_path and not is_missing(value):
-        value = normalize_path(str(value))
+        value = normalize_path_with_base(str(value), workspace_root(workspace))
     if required and is_missing(value):
         raise ValueError(f"缺少必要参数: {name}")
     return value, source

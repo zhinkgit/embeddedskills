@@ -25,6 +25,7 @@ from jlink_runtime import (  # noqa: E402
     default_config_path,
     emit_stream_record,
     get_state_entry,
+    hidden_subprocess_kwargs,
     load_json_file,
     load_project_config,
     load_workspace_state,
@@ -120,6 +121,7 @@ def main() -> None:
             encoding="utf-8",
             errors="replace",
             cwd=str(workspace),
+            **hidden_subprocess_kwargs(),
         )
         line_queue = start_stream_reader(proc.stdout)
         update_state_entry(
@@ -181,6 +183,7 @@ def main() -> None:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    **hidden_subprocess_kwargs(),
                 )
             elif proc.poll() is None:
                 proc.kill()
