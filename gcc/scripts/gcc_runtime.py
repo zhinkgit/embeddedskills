@@ -11,6 +11,10 @@ from typing import Any
 
 STATE_DIR_NAME = ".embeddedskills"
 STATE_FILE_NAME = "state.json"
+PROJECT_CONFIG_FILE_NAME = "config.json"
+
+# Skill name for project config
+SKILL_NAME = "gcc"
 
 
 def now_iso() -> str:
@@ -19,6 +23,67 @@ def now_iso() -> str:
 
 def default_config_path(script_file: str) -> Path:
     return Path(script_file).resolve().parents[1] / "config.json"
+
+
+def load_local_config(script_file: str | None = None) -> dict:
+    """加载 skill/config.json（环境级配置）
+    
+    路径：当前脚本所在 skill 目录下的 config.json
+    """
+    if script_file is None:
+        # 获取调用者的文件路径
+        import inspect
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            script_file = frame.f_back.f_globals.get("__file__", "")
+        if not script_file:
+            return {}
+    config_path = default_config_path(script_file)
+    return load_json_file(config_path)
+
+
+def save_local_config(data: dict, script_file: str | None = None) -> Path | None:
+    """保存环境级配置到 skill/config.json"""
+    if script_file is None:
+        import inspect
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            script_file = frame.f_back.f_globals.get("__file__", "")
+        if not script_file:
+            return None
+    config_path = default_config_path(script_file)
+    existing = load_json_file(config_path)
+    existing.update(data)
+    save_json_file(config_path, existing)
+    return config_path
+
+
+def load_project_config(workspace: str | None = None) -> dict:
+    """从 workspace/.embeddedskills/config.json 读取本 skill 的工程级配置
+    
+    参数: workspace - 工作区路径，None 时使用 cwd
+    返回: 该 skill 对应的配置字典（如 config["keil"] 或 config["gcc"]）
+    """
+    ws = workspace_root(workspace)
+    config_file = ws / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    data = load_json_file(config_file)
+    return data.get(SKILL_NAME, {})
+
+
+def save_project_config(workspace: str | None = None, values: dict | None = None) -> Path | None:
+    """写回工程级配置到 workspace/.embeddedskills/config.json
+    
+    - 只更新本 skill 的配置部分，不覆盖其他 skill 的配置
+    - 目录不存在时自动创建 .embeddedskills/
+    """
+    if values is None:
+        values = {}
+    ws = workspace_root(workspace)
+    config_file = ws / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    data = load_json_file(config_file)
+    data[SKILL_NAME] = {**(data.get(SKILL_NAME, {})), **values}
+    save_json_file(config_file, data)
+    return config_file
 
 
 def output_json(data: dict, *, indent: int = 2) -> None:

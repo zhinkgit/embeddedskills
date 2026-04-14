@@ -22,6 +22,8 @@ from gcc_runtime import (  # noqa: E402
     get_state_entry,
     is_missing,
     load_json_file,
+    load_local_config,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
@@ -30,6 +32,7 @@ from gcc_runtime import (  # noqa: E402
     output_json,
     parameter_context,
     resolve_param,
+    save_project_config,
     update_state_entry,
     workspace_root,
 )
@@ -56,6 +59,17 @@ def _resolve_workspace_path(workspace: Path, raw_path: str | None, default: str)
     value = default if is_missing(raw_path) else str(raw_path)
     path = Path(value)
     return str(path.resolve() if path.is_absolute() else (workspace / path).resolve())
+
+
+def _make_relative_to_workspace(workspace: Path, path: str) -> str:
+    """将绝对路径转换为相对于 workspace 的相对路径"""
+    try:
+        p = Path(path).resolve()
+        ws = workspace.resolve()
+        rel = p.relative_to(ws)
+        return str(rel).replace("\\", "/")
+    except ValueError:
+        return path
 
 
 def _find_elf(build_dir: Path, project_name: str) -> str:
@@ -317,41 +331,72 @@ def main() -> None:
     started_at = now_iso()
     started_ts = time.time()
     workspace = workspace_root(args.workspace)
-    config_path = normalize_path(args.config or str(default_config_path(__file__)))
-    config = load_json_file(config_path)
+    
+    # 加载三层配置：环境级、工程级、状态
+    local_config = load_local_config(__file__)
+    project_config = load_project_config(str(workspace))
     state = load_workspace_state(str(workspace))
     last_build = get_state_entry(state, "last_build")
 
     parameter_sources: dict[str, str] = {}
     try:
+        # cmake_exe: CLI > 环境级配置 > 必需
         cmake_exe, parameter_sources["cmake"] = resolve_param(
             "cmake",
             args.cmake,
-            config=config,
+            config=local_config,
             config_keys=["cmake_exe"],
             required=True,
         )
+        
+        # project: CLI > 环境级配置 > 工程级配置 > state.json > 必需
         project, parameter_sources["project"] = resolve_param(
             "project",
             args.project,
-            config=config,
+            config=local_config,
             config_keys=["default_project"],
-            state_record=last_build,
-            state_keys=["project"],
-            required=True,
             normalize_as_path=True,
         )
+        # 工程级配置（优先于 state）
+        if is_missing(project) and not is_missing(project_config.get("project")):
+            project = normalize_path(project_config.get("project"))
+            parameter_sources["project"] = "project_config:project"
+        # state.json（最后 fallback）
+        if is_missing(project) and not is_missing(last_build.get("project")):
+            project = normalize_path(str(last_build.get("project")))
+            parameter_sources["project"] = "state:project"
+        if is_missing(project):
+            raise ValueError("缺少必要参数: project")
+        
+        # preset: CLI > 环境级配置 > 工程级配置 > state.json > 必需
         preset, parameter_sources["preset"] = resolve_param(
             "preset",
             args.preset,
-            config=config,
+            config=local_config,
             config_keys=["default_preset"],
-            state_record=last_build,
-            state_keys=["preset"],
-            required=True,
         )
-        log_dir = _resolve_workspace_path(workspace, args.log_dir or config.get("log_dir"), ".build")
-        parameter_sources["log_dir"] = "cli" if args.log_dir else ("config:log_dir" if config.get("log_dir") else "default")
+        # 工程级配置（优先于 state）
+        if is_missing(preset) and not is_missing(project_config.get("preset")):
+            preset = project_config.get("preset")
+            parameter_sources["preset"] = "project_config:preset"
+        # state.json（最后 fallback）
+        if is_missing(preset) and not is_missing(last_build.get("preset")):
+            preset = last_build.get("preset")
+            parameter_sources["preset"] = "state:preset"
+        if is_missing(preset):
+            raise ValueError("缺少必要参数: preset")
+        
+        # log_dir: CLI > 工程级配置 > 环境级配置 > 默认值(.embeddedskills/build)
+        log_dir_raw = args.log_dir or project_config.get("log_dir") or local_config.get("log_dir")
+        log_dir = _resolve_workspace_path(workspace, log_dir_raw, ".embeddedskills/build")
+        if args.log_dir:
+            parameter_sources["log_dir"] = "cli"
+        elif project_config.get("log_dir"):
+            parameter_sources["log_dir"] = "project_config:log_dir"
+        elif local_config.get("log_dir"):
+            parameter_sources["log_dir"] = "config:log_dir"
+        else:
+            parameter_sources["log_dir"] = "default"
     except ValueError as exc:
         result = make_result(
             status="error",
@@ -362,7 +407,6 @@ def main() -> None:
                 provider="gcc",
                 workspace=str(workspace),
                 parameter_sources=parameter_sources,
-                config_path=config_path,
             ),
             error={"code": "missing_param", "message": str(exc)},
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
@@ -392,7 +436,6 @@ def main() -> None:
                 provider="gcc",
                 workspace=str(workspace),
                 parameter_sources=parameter_sources,
-                config_path=config_path,
             ),
             metrics=raw_result.get("metrics", {}),
             error=raw_result["error"],
@@ -430,6 +473,18 @@ def main() -> None:
         if artifacts.get("debug_file"):
             next_actions.append("可直接复用 artifacts.debug_file 继续 gdb 调试")
 
+        # 构建成功后，将确认过的参数写回工程级配置
+        if raw_result["status"] == "ok":
+            project_rel = _make_relative_to_workspace(workspace, project)
+            save_project_config(
+                str(workspace),
+                {
+                    "project": project_rel,
+                    "preset": preset or "",
+                    "log_dir": _make_relative_to_workspace(workspace, log_dir),
+                },
+            )
+
         result = make_result(
             status=raw_result["status"],
             action=raw_result["action"],
@@ -439,7 +494,6 @@ def main() -> None:
                 provider="gcc",
                 workspace=str(workspace),
                 parameter_sources=parameter_sources,
-                config_path=config_path,
             ),
             artifacts=artifacts,
             metrics=metrics,

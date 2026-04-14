@@ -11,6 +11,8 @@ from typing import Any
 
 STATE_DIR_NAME = ".embeddedskills"
 STATE_FILE_NAME = "state.json"
+PROJECT_CONFIG_FILE_NAME = "config.json"
+SKILL_NAME = "jlink"
 
 
 def now_iso() -> str:
@@ -19,6 +21,68 @@ def now_iso() -> str:
 
 def default_config_path(script_file: str) -> Path:
     return Path(script_file).resolve().parents[1] / "config.json"
+
+
+def load_local_config(script_file: str = "") -> dict:
+    """加载 skill/config.json（环境级配置）"""
+    if script_file:
+        config_path = default_config_path(script_file)
+    else:
+        # 尝试从调用栈推断路径
+        import inspect
+
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller_file = frame.f_back.f_globals.get("__file__", "")
+            if caller_file:
+                config_path = default_config_path(caller_file)
+            else:
+                config_path = Path(__file__).resolve().parents[1] / "config.json"
+        else:
+            config_path = Path(__file__).resolve().parents[1] / "config.json"
+    return load_json_file(config_path)
+
+
+def save_local_config(data: dict, script_file: str = "") -> None:
+    """保存环境级配置到 skill/config.json"""
+    if script_file:
+        config_path = default_config_path(script_file)
+    else:
+        config_path = Path(__file__).resolve().parents[1] / "config.json"
+    save_json_file(config_path, data)
+
+
+def load_project_config(workspace: str | None = None) -> dict:
+    """从 workspace/.embeddedskills/config.json 读取本 skill 的工程级配置
+    参数: workspace - 工作区路径，None 时使用 cwd
+    返回: 该 skill 对应的配置字典
+    """
+    ws_root = workspace_root(workspace)
+    project_config_path = ws_root / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    full_config = load_json_file(project_config_path)
+    return full_config.get(SKILL_NAME, {})
+
+
+def save_project_config(workspace: str | None = None, values: dict | None = None) -> None:
+    """写回工程级配置到 workspace/.embeddedskills/config.json
+    - 只更新本 skill 的配置部分，不覆盖其他 skill 的配置
+    - 目录不存在时自动创建 .embeddedskills/
+    - jlink_runtime 中 skill_name 硬编码为 "jlink"
+    """
+    if values is None:
+        values = {}
+    ws_root = workspace_root(workspace)
+    project_config_path = ws_root / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+
+    # 读取现有配置（如果存在）
+    full_config = load_json_file(project_config_path)
+    if not isinstance(full_config, dict):
+        full_config = {}
+
+    # 只更新本 skill 的配置部分
+    full_config[SKILL_NAME] = {**(full_config.get(SKILL_NAME) or {}), **values}
+
+    save_json_file(project_config_path, full_config)
 
 
 def output_json(data: dict, *, indent: int = 2) -> None:

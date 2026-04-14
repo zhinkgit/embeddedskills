@@ -18,30 +18,50 @@ Claude Code skill，用于嵌入式串口调试：端口扫描、实时监控、
 
 ## 配置
 
-复制 `config.example.json` 为 `config.json`，根据实际环境修改：
+### 环境级配置 (`config.json`)
+
+serial skill 的环境级配置目前为空对象 `{}`，因为串口参数属于工程级配置，统一在工作区的 `.embeddedskills/config.json` 中管理。
+
+### 工程级配置 (`.embeddedskills/config.json`)
+
+工作区下的 `.embeddedskills/config.json` 存放工程级串口配置：
 
 ```json
 {
-  "default_port": "",
-  "default_baudrate": 115200,
-  "default_bytesize": 8,
-  "default_parity": "none",
-  "default_stopbits": 1,
-  "default_encoding": "utf-8",
-  "default_timeout_sec": 1.0,
-  "default_log_dir": ".logs"
+  "serial": {
+    "port": "",
+    "baudrate": 115200,
+    "bytesize": 8,
+    "parity": "none",
+    "stopbits": 1,
+    "encoding": "utf-8",
+    "timeout_sec": 1.0,
+    "log_dir": ".embeddedskills/logs/serial"
+  }
 }
 ```
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `default_port` | 否 | 串口号（如 `COM3`），为空时需手动指定 |
-| `default_baudrate` | 否 | 波特率，默认 115200 |
-| `default_bytesize` | 否 | 数据位，默认 8 |
-| `default_parity` | 否 | 校验位：`none` / `even` / `odd` / `mark` / `space` |
-| `default_stopbits` | 否 | 停止位：`1` / `1.5` / `2` |
-| `default_encoding` | 否 | 文本编码，默认 `utf-8` |
-| `default_timeout_sec` | 否 | 读写超时秒数，默认 1.0 |
-| `default_log_dir` | 否 | 日志输出目录，默认 `.logs` |
+| `port` | 否 | 串口号（如 `COM3`），为空时自动扫描 |
+| `baudrate` | 否 | 波特率，默认 115200 |
+| `bytesize` | 否 | 数据位，默认 8 |
+| `parity` | 否 | 校验位：`none` / `even` / `odd` / `mark` / `space` |
+| `stopbits` | 否 | 停止位：`1` / `1.5` / `2` |
+| `encoding` | 否 | 文本编码，默认 `utf-8` |
+| `timeout_sec` | 否 | 读写超时秒数，默认 1.0 |
+| `log_dir` | 否 | 日志输出目录，默认 `.embeddedskills/logs/serial` |
 
-> 注意：所有连接参数仅从 `config.json` 读取，不通过命令行传递。
+### 参数解析优先级
+
+1. **CLI 参数** (`--port`, `--baudrate` 等) - 最高优先级
+2. **工程级配置** (`.embeddedskills/config.json` 中的 `serial` 部分)
+3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+4. **默认值** - 最低优先级
+
+### 自动扫描行为
+
+当未指定 `port` 时，脚本会自动扫描系统串口：
+- 若只找到一个串口，自动使用该端口并写入工程配置
+- 若找到多个串口，返回候选列表让用户选择（通过 `--port` 指定）
+- 若未找到串口，提示错误

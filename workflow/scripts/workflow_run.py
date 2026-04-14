@@ -16,7 +16,9 @@ if str(ROOT_DIR) not in sys.path:
 
 from workflow_runtime import (  # noqa: E402
     get_state_entry,
+    load_full_project_config,
     load_json_file,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
@@ -24,6 +26,8 @@ from workflow_runtime import (  # noqa: E402
     now_iso,
     output_json,
     parameter_context,
+    save_project_config,
+    update_state_entry,
     workspace_root,
 )
 
@@ -59,8 +63,8 @@ def run_json(cmd: list[str], workdir: Path) -> dict:
         }
 
 
-def select_build_backend(config: dict, discovery: dict, explicit: str | None) -> tuple[str | None, dict | None]:
-    backend = explicit or config.get("preferred_build") or "auto"
+def select_build_backend(workflow_config: dict, discovery: dict, explicit: str | None) -> tuple[str | None, dict | None]:
+    backend = explicit or workflow_config.get("preferred_build") or "auto"
     if backend != "auto":
         return backend, None
     candidates = [name for name in ("keil", "gcc") if discovery[name]]
@@ -71,13 +75,15 @@ def select_build_backend(config: dict, discovery: dict, explicit: str | None) ->
     return None, {"code": "no_build_backend", "message": "未发现可构建工程", "candidates": []}
 
 
-def build_project(workspace: Path, config: dict, discovery: dict, backend: str | None) -> dict:
-    selected, error = select_build_backend(config, discovery, backend)
+def build_project(workspace: Path, full_config: dict, discovery: dict, backend: str | None) -> dict:
+    workflow_config = full_config.get("workflow", {})
+    selected, error = select_build_backend(workflow_config, discovery, backend)
     if error:
         return {"status": "error", "action": "build", "error": error}
 
     if selected == "keil":
-        project = config.get("keil", {}).get("project")
+        keil_config = full_config.get("keil", {})
+        project = keil_config.get("project")
         if not project:
             project, error = _single_or_error(discovery["keil"], "Keil 工程")
             if error:
@@ -92,22 +98,23 @@ def build_project(workspace: Path, config: dict, discovery: dict, backend: str |
             project,
             "--json",
         ]
-        target = config.get("keil", {}).get("target")
-        uv4_exe = config.get("keil", {}).get("uv4_exe")
+        target = keil_config.get("target")
+        uv4_exe = keil_config.get("uv4_exe")
         if target:
             cmd.extend(["--target", target])
         if uv4_exe:
             cmd.extend(["--uv4", uv4_exe])
         return run_json(cmd, workspace)
 
-    project = config.get("gcc", {}).get("project")
+    gcc_config = full_config.get("gcc", {})
+    project = gcc_config.get("project")
     if not project:
         project, error = _single_or_error(discovery["gcc"], "GCC 工程")
         if error:
             return {"status": "error", "action": "build", "error": error}
-    preset = config.get("gcc", {}).get("preset")
+    preset = gcc_config.get("preset")
     if not preset:
-        return {"status": "error", "action": "build", "error": {"code": "missing_preset", "message": "workflow 需要在 workflow/config.json 中为 GCC 配置 preset"}}
+        return {"status": "error", "action": "build", "error": {"code": "missing_preset", "message": "需要在 .embeddedskills/config.json 的 gcc 段配置 preset"}}
     cmd = [
         PYTHON_EXE,
         str(ROOT_DIR / "gcc" / "scripts" / "gcc_build.py"),
@@ -120,14 +127,15 @@ def build_project(workspace: Path, config: dict, discovery: dict, backend: str |
         preset,
         "--json",
     ]
-    cmake_exe = config.get("gcc", {}).get("cmake_exe")
+    cmake_exe = gcc_config.get("cmake_exe")
     if cmake_exe:
         cmd.extend(["--cmake", cmake_exe])
     return run_json(cmd, workspace)
 
 
-def flash_project(workspace: Path, config: dict, state: dict, explicit: str | None) -> dict:
-    backend = explicit or config.get("preferred_flash") or "auto"
+def flash_project(workspace: Path, full_config: dict, state: dict, explicit: str | None) -> dict:
+    workflow_config = full_config.get("workflow", {})
+    backend = explicit or workflow_config.get("preferred_flash") or "auto"
     last_build = get_state_entry(state, "last_build")
     artifacts = last_build.get("artifacts", {})
     flash_file = last_build.get("flash_file") or artifacts.get("flash_file")
@@ -135,7 +143,7 @@ def flash_project(workspace: Path, config: dict, state: dict, explicit: str | No
         return {"status": "error", "action": "flash", "error": {"code": "missing_last_build", "message": "未找到 last_build.flash_file，请先执行 workflow build"}}
 
     if backend in ("auto", "openocd"):
-        openocd_cfg = config.get("openocd", {})
+        openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
             str(ROOT_DIR / "openocd" / "scripts" / "openocd_run.py"),
@@ -154,9 +162,9 @@ def flash_project(workspace: Path, config: dict, state: dict, explicit: str | No
             cmd.extend(["--target", openocd_cfg["target"]])
         return run_json(cmd, workspace)
 
-    jlink_cfg = config.get("jlink", {})
+    jlink_cfg = full_config.get("jlink", {})
     if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "flash", "error": {"code": "missing_device", "message": "workflow 使用 jlink flash 时需要在 workflow/config.json 里提供 jlink.device"}}
+        return {"status": "error", "action": "flash", "error": {"code": "missing_device", "message": "使用 jlink flash 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
     cmd = [
         PYTHON_EXE,
         str(ROOT_DIR / "jlink" / "scripts" / "jlink_exec.py"),
@@ -174,8 +182,9 @@ def flash_project(workspace: Path, config: dict, state: dict, explicit: str | No
     return run_json(cmd, workspace)
 
 
-def debug_project(workspace: Path, config: dict, state: dict, explicit: str | None) -> dict:
-    backend = explicit or config.get("preferred_debug") or "auto"
+def debug_project(workspace: Path, full_config: dict, state: dict, explicit: str | None) -> dict:
+    workflow_config = full_config.get("workflow", {})
+    backend = explicit or workflow_config.get("preferred_debug") or "auto"
     last_build = get_state_entry(state, "last_build")
     artifacts = last_build.get("artifacts", {})
     debug_file = last_build.get("debug_file") or artifacts.get("debug_file")
@@ -183,7 +192,7 @@ def debug_project(workspace: Path, config: dict, state: dict, explicit: str | No
         return {"status": "error", "action": "build-debug", "error": {"code": "missing_last_build", "message": "未找到 last_build.debug_file，请先执行 workflow build"}}
 
     if backend in ("auto", "openocd"):
-        openocd_cfg = config.get("openocd", {})
+        openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
             str(ROOT_DIR / "openocd" / "scripts" / "openocd_gdb.py"),
@@ -204,9 +213,9 @@ def debug_project(workspace: Path, config: dict, state: dict, explicit: str | No
             cmd.extend(["--gdb-exe", openocd_cfg["gdb_exe"]])
         return run_json(cmd, workspace)
 
-    jlink_cfg = config.get("jlink", {})
+    jlink_cfg = full_config.get("jlink", {})
     if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "build-debug", "error": {"code": "missing_device", "message": "workflow 使用 jlink gdb 时需要在 workflow/config.json 里提供 jlink.device"}}
+        return {"status": "error", "action": "build-debug", "error": {"code": "missing_device", "message": "使用 jlink gdb 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
     cmd = [
         PYTHON_EXE,
         str(ROOT_DIR / "jlink" / "scripts" / "jlink_gdb.py"),
@@ -226,10 +235,11 @@ def debug_project(workspace: Path, config: dict, state: dict, explicit: str | No
     return run_json(cmd, workspace)
 
 
-def observe_project(workspace: Path, config: dict, explicit: str | None) -> dict:
-    backend = explicit or config.get("preferred_observe") or "auto"
+def observe_project(workspace: Path, full_config: dict, explicit: str | None) -> dict:
+    workflow_config = full_config.get("workflow", {})
+    backend = explicit or workflow_config.get("preferred_observe") or "auto"
     if backend in ("auto", "openocd"):
-        openocd_cfg = config.get("openocd", {})
+        openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
             str(ROOT_DIR / "openocd" / "scripts" / "openocd_semihosting.py"),
@@ -245,9 +255,9 @@ def observe_project(workspace: Path, config: dict, explicit: str | None) -> dict
             cmd.extend(["--target", openocd_cfg["target"]])
         return {"status": "ok", "action": "observe", "summary": "已生成 openocd semihosting 观察命令", "details": {"command": cmd}}
 
-    jlink_cfg = config.get("jlink", {})
+    jlink_cfg = full_config.get("jlink", {})
     if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "observe", "error": {"code": "missing_device", "message": "workflow 使用 jlink 观测时需要在 workflow/config.json 里提供 jlink.device"}}
+        return {"status": "error", "action": "observe", "error": {"code": "missing_device", "message": "使用 jlink 观测时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
     cmd = [
         PYTHON_EXE,
         str(ROOT_DIR / "jlink" / "scripts" / "jlink_rtt.py"),
@@ -260,14 +270,15 @@ def observe_project(workspace: Path, config: dict, explicit: str | None) -> dict
     return {"status": "ok", "action": "observe", "summary": "已生成 jlink RTT 观察命令", "details": {"command": cmd}}
 
 
-def diagnose(workspace: Path, config: dict, discovery: dict, state: dict) -> dict:
+def diagnose(workspace: Path, full_config: dict, discovery: dict, state: dict) -> dict:
+    workflow_config = full_config.get("workflow", {})
     hints = []
     if not discovery["keil"] and not discovery["gcc"]:
         hints.append("当前 workspace 未发现 Keil/GCC 工程")
     if not get_state_entry(state, "last_build"):
         hints.append("尚未生成 last_build，后续 flash/debug 无法自动串联")
-    if config.get("preferred_build") == "auto" and discovery["keil"] and discovery["gcc"]:
-        hints.append("同时存在 Keil 与 GCC 工程，建议在 workflow/config.json 固定 preferred_build")
+    if workflow_config.get("preferred_build") == "auto" and discovery["keil"] and discovery["gcc"]:
+        hints.append("同时存在 Keil 与 GCC 工程，建议在 .embeddedskills/config.json 的 workflow 段固定 preferred_build")
     return {
         "status": "ok",
         "action": "diagnose",
@@ -290,7 +301,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="workflow run")
     parser.add_argument("action", choices=["plan", "build", "build-flash", "build-debug", "observe", "diagnose"])
     parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
-    parser.add_argument("--config", default=None, help="workflow config.json 路径")
+    parser.add_argument("--config", default=None, help="workflow config.json 路径（已废弃，仅保留兼容性）")
     parser.add_argument("--build-backend", choices=["auto", "keil", "gcc"], default=None)
     parser.add_argument("--flash-backend", choices=["auto", "jlink", "openocd"], default=None)
     parser.add_argument("--debug-backend", choices=["auto", "jlink", "openocd"], default=None)
@@ -301,23 +312,33 @@ def main() -> None:
     started_at = now_iso()
     started_ts = time.time()
     workspace = workspace_root(args.workspace)
-    config_path = normalize_path(args.config or str(workspace / "workflow" / "config.json"))
-    config = load_json_file(config_path)
+    # 从 .embeddedskills/config.json 读取完整配置
+    full_config = load_full_project_config(str(workspace))
+    workflow_config = load_project_config(str(workspace))
     state = load_workspace_state(str(workspace))
     discovery = discover_projects(workspace)
+
+    # 用于追踪实际使用的后端，成功后将写回配置
+    used_backends = {}
 
     if args.action == "plan":
         cmd = [PYTHON_EXE, str(ROOT_DIR / "workflow" / "scripts" / "workflow_plan.py"), "--workspace", str(workspace), "--json"]
         result = run_json(cmd, workspace)
     elif args.action == "build":
-        result = build_project(workspace, config, discovery, args.build_backend)
+        result = build_project(workspace, full_config, discovery, args.build_backend)
+        if result.get("status") == "ok" and result.get("details", {}).get("backend"):
+            used_backends["preferred_build"] = result["details"]["backend"]
     elif args.action == "build-flash":
-        build_result = build_project(workspace, config, discovery, args.build_backend)
+        build_result = build_project(workspace, full_config, discovery, args.build_backend)
         if build_result.get("status") == "error":
             result = build_result
         else:
+            if build_result.get("details", {}).get("backend"):
+                used_backends["preferred_build"] = build_result["details"]["backend"]
             state = load_workspace_state(str(workspace))
-            flash_result = flash_project(workspace, config, state, args.flash_backend)
+            flash_result = flash_project(workspace, full_config, state, args.flash_backend)
+            if flash_result.get("status") == "ok" and flash_result.get("details", {}).get("backend"):
+                used_backends["preferred_flash"] = flash_result["details"]["backend"]
             result = {
                 "status": flash_result.get("status", "error"),
                 "action": "build-flash",
@@ -325,12 +346,16 @@ def main() -> None:
                 "details": {"build": build_result, "flash": flash_result},
             }
     elif args.action == "build-debug":
-        build_result = build_project(workspace, config, discovery, args.build_backend)
+        build_result = build_project(workspace, full_config, discovery, args.build_backend)
         if build_result.get("status") == "error":
             result = build_result
         else:
+            if build_result.get("details", {}).get("backend"):
+                used_backends["preferred_build"] = build_result["details"]["backend"]
             state = load_workspace_state(str(workspace))
-            debug_result = debug_project(workspace, config, state, args.debug_backend)
+            debug_result = debug_project(workspace, full_config, state, args.debug_backend)
+            if debug_result.get("status") == "ok" and debug_result.get("details", {}).get("backend"):
+                used_backends["preferred_debug"] = debug_result["details"]["backend"]
             result = {
                 "status": debug_result.get("status", "error"),
                 "action": "build-debug",
@@ -338,16 +363,32 @@ def main() -> None:
                 "details": {"build": build_result, "debug": debug_result},
             }
     elif args.action == "observe":
-        result = observe_project(workspace, config, args.observe_backend)
+        result = observe_project(workspace, full_config, args.observe_backend)
+        if result.get("status") == "ok" and result.get("details", {}).get("backend"):
+            used_backends["preferred_observe"] = result["details"]["backend"]
     else:
-        result = diagnose(workspace, config, discovery, state)
+        result = diagnose(workspace, full_config, discovery, state)
+
+    # 将确认过的 preferred 值写回 .embeddedskills/config.json
+    if used_backends:
+        save_project_config(str(workspace), used_backends)
+
+    # 更新运行状态到 state.json
+    if result.get("status") == "ok" and args.action in ("build", "build-flash", "build-debug", "observe"):
+        state_record = {
+            "action": args.action,
+            "timestamp": now_iso(),
+        }
+        if result.get("details"):
+            state_record["details"] = result["details"]
+        update_state_entry(f"last_{args.action.replace('-', '_')}", state_record, str(workspace))
 
     wrapped = make_result(
         status=result.get("status", "error"),
         action=args.action,
         summary=result.get("summary", "workflow 执行完成"),
         details=result.get("details", {}),
-        context=parameter_context(provider="workflow", workspace=str(workspace), config_path=config_path),
+        context=parameter_context(provider="workflow", workspace=str(workspace)),
         error=result.get("error"),
         timing=make_timing(started_at, (time.time() - started_ts) * 1000),
     )

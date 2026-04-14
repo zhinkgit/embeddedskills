@@ -106,15 +106,28 @@ git clone https://github.com/luhao200/embeddedskills .claude/skills/embeddedskil
 
 ### 配置
 
-将所需 skill 的 `config.example.json` 复制为 `config.json`，填入本地路径和参数：
+#### 环境级配置（必需）
+
+将各 skill 的 `config.example.json` 复制为 `config.json`，填入本地工具路径：
 
 ```bash
 cd ~/.claude/skills/embeddedskills/jlink
 cp config.example.json config.json
-# 编辑 config.json，填写 JLink.exe 路径、默认芯片型号等
+# 编辑 config.json，填写 JLink.exe 路径等环境参数
 ```
 
 > `config.json` 已被 `.gitignore` 排除，不会提交到仓库。
+
+#### 工程级配置（可选）
+
+在项目根目录创建 `.embeddedskills/config.json` 保存工程默认配置：
+
+```bash
+mkdir -p .embeddedskills
+# 创建 config.json 并填写工程默认参数
+```
+
+> `.embeddedskills/` 目录已被 `.gitignore` 排除，不会提交到仓库。
 
 ### 外部依赖
 
@@ -158,9 +171,61 @@ cp config.example.json config.json
 
 完整字段还包括 `context`、`metrics`、`state`、`timing`。流式命令使用 JSON Lines。
 
-### Workspace 状态
+### 配置分层
 
-运行期状态存放在项目目录的 `.embeddedskills/state.json`，记录 `last_build`、`last_flash`、`last_debug`、`last_observe`。
+本工具集采用三层配置结构：
+
+| 层级 | 文件位置 | 用途 | 示例内容 |
+|------|----------|------|----------|
+| **环境级配置** | `skill/config.json` | 工具路径、本机硬件参数 | `uv4_exe` 路径、`jlink_exe` 路径 |
+| **工程级共享配置** | `workspace/.embeddedskills/config.json` | 按 skill 分组的工程默认配置 | 目标芯片、接口、日志目录等 |
+| **运行状态** | `workspace/.embeddedskills/state.json` | 仅保存运行状态 | `last_build`、`last_flash`、`last_debug`、`last_observe` |
+
+#### 工程级配置完整结构示例
+
+```json
+{
+  "workflow": {
+    "preferred_build": "auto",
+    "preferred_flash": "auto",
+    "preferred_debug": "auto",
+    "preferred_observe": "auto"
+  },
+  "keil": { "project": "", "target": "", "log_dir": ".embeddedskills/build" },
+  "gcc": { "project": "", "preset": "", "log_dir": ".embeddedskills/build" },
+  "jlink": { "device": "", "interface": "SWD", "speed": "4000" },
+  "openocd": { "board": "", "interface": "", "target": "", "adapter_speed": "", "transport": "", "tpiu_name": "", "traceclk": "", "pin_freq": "" },
+  "serial": { "port": "", "baudrate": 115200, "bytesize": 8, "parity": "none", "stopbits": 1, "encoding": "utf-8", "timeout_sec": 1.0, "log_dir": ".embeddedskills/logs/serial" },
+  "can": { "interface": "", "channel": "", "bitrate": 0, "data_bitrate": 0, "log_dir": ".embeddedskills/logs/can" },
+  "net": { "interface": "", "target": "", "capture_filter": "", "display_filter": "", "duration": 30, "timeout_ms": 1000, "scan_ports": "", "capture_format": "pcapng", "log_dir": ".embeddedskills/logs/net" }
+}
+```
+
+#### 统一日志目录
+
+| 类型 | 目录 |
+|------|------|
+| 构建日志 | `.embeddedskills/build` |
+| 串口日志 | `.embeddedskills/logs/serial` |
+| CAN 日志 | `.embeddedskills/logs/can` |
+| 网络日志 | `.embeddedskills/logs/net` |
+
+#### 参数解析顺序
+
+1. CLI 参数
+2. `skill/config.json`（环境级）
+3. `.embeddedskills/config.json`（工程级）
+4. `.embeddedskills/state.json`（运行状态）
+5. 本地探测/搜索
+6. 询问用户
+
+#### 配置写回规则
+
+| 配置类型 | 写回位置 |
+|----------|----------|
+| 环境级值 | `skill/config.json` |
+| 工程级值 | `.embeddedskills/config.json` |
+| 运行状态 | `.embeddedskills/state.json` |
 
 ### 执行模式
 

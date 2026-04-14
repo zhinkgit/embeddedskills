@@ -9,30 +9,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+from serial_runtime import (
+    get_serial_config,
+    open_serial_port,
+    save_project_config,
+    update_state_entry,
+    normalize_path,
+)
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
-
-
-def load_config():
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def open_serial(cfg):
-    import serial
-
-    parity = PARITY_MAP.get(cfg.get("default_parity", "none"), "N")
-    return serial.Serial(
-        port=cfg["default_port"],
-        baudrate=cfg.get("default_baudrate", 115200),
-        bytesize=cfg.get("default_bytesize", 8),
-        parity=parity,
-        stopbits=cfg.get("default_stopbits", 1),
-        timeout=cfg.get("default_timeout_sec", 1.0),
-    )
 
 
 def output_json(obj):
@@ -52,6 +37,12 @@ def error_exit(code, message, use_json):
 
 def main():
     parser = argparse.ArgumentParser(description="串口日志记录")
+    parser.add_argument("--port", help="串口号 (如 COM3)")
+    parser.add_argument("--baudrate", type=int, help="波特率")
+    parser.add_argument("--bytesize", type=int, help="数据位")
+    parser.add_argument("--parity", help="校验位 (none/even/odd)")
+    parser.add_argument("--stopbits", type=int, help="停止位")
+    parser.add_argument("--encoding", help="编码")
     parser.add_argument("--output", "-o", help="输出文件路径")
     parser.add_argument("--timestamp", action="store_true", help="每行加时间戳")
     parser.add_argument("--max-size", type=float, default=0, help="最大文件大小(MB)，0=无限")
@@ -61,13 +52,35 @@ def main():
     parser.add_argument("--json", action="store_true", help="最终输出 summary JSON")
     args = parser.parse_args()
 
-    cfg = load_config()
-    if not cfg.get("default_port"):
-        error_exit("no_port", "config.json 中未配置 default_port", args.json)
-    if not cfg.get("default_baudrate"):
-        error_exit("no_baudrate", "config.json 中未配置 default_baudrate", args.json)
+    start_time = time.time()
 
-    log_dir = cfg.get("default_log_dir", ".logs")
+    # 获取配置
+    cfg, sources = get_serial_config(
+        cli_port=args.port,
+        cli_baudrate=args.baudrate,
+        cli_bytesize=args.bytesize,
+        cli_parity=args.parity,
+        cli_stopbits=args.stopbits,
+        cli_encoding=args.encoding,
+    )
+
+    if cfg is None:
+        if sources.get("need_selection"):
+            error_exit("multiple_candidates", f"{sources['error']}，请用 --port 指定", args.json)
+        else:
+            error_exit("config_error", sources.get("error", "配置错误"), args.json)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "bytesize": cfg["bytesize"],
+        "parity": cfg["parity"],
+        "stopbits": cfg["stopbits"],
+        "encoding": cfg["encoding"],
+    })
+
+    log_dir = cfg["log_dir"]
     if not args.output:
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -75,15 +88,14 @@ def main():
         args.output = os.path.join(log_dir, f"serial_{ts}.{ext}")
 
     try:
-        ser = open_serial(cfg)
+        ser = open_serial_port(cfg)
     except Exception as e:
         error_exit("connect_failed", str(e), args.json)
 
     line_count = 0
     byte_count = 0
-    start_time = time.time()
     running = True
-    encoding = cfg.get("default_encoding", "utf-8")
+    encoding = cfg["encoding"]
     max_bytes = int(args.max_size * 1024 * 1024) if args.max_size > 0 else 0
 
     def on_signal(sig, frame):
@@ -156,6 +168,16 @@ def main():
     else:
         print(f"\n日志已保存: {os.path.abspath(args.output)}")
         print(f"  共 {line_count} 行, {byte_count} 字节, 耗时 {duration}s")
+
+    # 更新状态
+    update_state_entry("last_observe", {
+        "type": "serial_log",
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "file": os.path.abspath(args.output),
+        "lines": line_count,
+        "duration_sec": duration,
+    })
 
 
 if __name__ == "__main__":

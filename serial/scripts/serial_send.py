@@ -6,30 +6,14 @@ import sys
 import time
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+from serial_runtime import (
+    get_serial_config,
+    open_serial_port,
+    save_project_config,
+    update_state_entry,
+)
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
-
-
-def load_config():
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def open_serial(cfg):
-    import serial
-
-    parity = PARITY_MAP.get(cfg.get("default_parity", "none"), "N")
-    return serial.Serial(
-        port=cfg["default_port"],
-        baudrate=cfg.get("default_baudrate", 115200),
-        bytesize=cfg.get("default_bytesize", 8),
-        parity=parity,
-        stopbits=cfg.get("default_stopbits", 1),
-        timeout=cfg.get("default_timeout_sec", 1.0),
-    )
 
 
 def output_json(obj):
@@ -52,8 +36,8 @@ def build_payload(data, hex_mode, line_ending):
         try:
             clean = data.replace(" ", "").replace("0x", "").replace(",", "")
             return bytes.fromhex(clean)
-        except ValueError as e:
-            return None, f"Hex 解析失败: {e}"
+        except ValueError:
+            return None
     else:
         payload = data.encode("utf-8")
         if line_ending == "cr":
@@ -68,6 +52,12 @@ def build_payload(data, hex_mode, line_ending):
 def main():
     parser = argparse.ArgumentParser(description="串口数据发送")
     parser.add_argument("data", help="要发送的数据")
+    parser.add_argument("--port", help="串口号 (如 COM3)")
+    parser.add_argument("--baudrate", type=int, help="波特率")
+    parser.add_argument("--bytesize", type=int, help="数据位")
+    parser.add_argument("--parity", help="校验位 (none/even/odd)")
+    parser.add_argument("--stopbits", type=int, help="停止位")
+    parser.add_argument("--encoding", help="编码")
     parser.add_argument("--hex", action="store_true", help="以 Hex 模式发送")
     parser.add_argument("--cr", action="store_true", help="追加 CR")
     parser.add_argument("--lf", action="store_true", help="追加 LF")
@@ -79,20 +69,40 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON 输出")
     args = parser.parse_args()
 
-    cfg = load_config()
-    if not cfg.get("default_port"):
-        error_exit("no_port", "config.json 中未配置 default_port", args.json)
-    if not cfg.get("default_baudrate"):
-        error_exit("no_baudrate", "config.json 中未配置 default_baudrate", args.json)
+    # 获取配置
+    cfg, sources = get_serial_config(
+        cli_port=args.port,
+        cli_baudrate=args.baudrate,
+        cli_bytesize=args.bytesize,
+        cli_parity=args.parity,
+        cli_stopbits=args.stopbits,
+        cli_encoding=args.encoding,
+    )
+
+    if cfg is None:
+        if sources.get("need_selection"):
+            error_exit("multiple_candidates", f"{sources['error']}，请用 --port 指定", args.json)
+        else:
+            error_exit("config_error", sources.get("error", "配置错误"), args.json)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "bytesize": cfg["bytesize"],
+        "parity": cfg["parity"],
+        "stopbits": cfg["stopbits"],
+        "encoding": cfg["encoding"],
+    })
 
     line_ending = "crlf" if args.crlf else ("cr" if args.cr else ("lf" if args.lf else ""))
 
     payload = build_payload(args.data, args.hex, line_ending)
     if payload is None:
-        error_exit("bad_hex", str(payload), args.json)
+        error_exit("bad_hex", "Hex 解析失败，请检查输入格式", args.json)
 
     try:
-        ser = open_serial(cfg)
+        ser = open_serial_port(cfg)
     except Exception as e:
         error_exit("connect_failed", str(e), args.json)
 
@@ -110,7 +120,7 @@ def main():
                 rx_raw = ser.read(4096)
                 if rx_raw:
                     try:
-                        entry["rx"] = rx_raw.decode(cfg.get("default_encoding", "utf-8"), errors="replace")
+                        entry["rx"] = rx_raw.decode(cfg["encoding"], errors="replace")
                     except Exception:
                         entry["rx"] = rx_raw.hex(" ")
                     entry["rx_bytes"] = len(rx_raw)
@@ -135,7 +145,7 @@ def main():
     result = {
         "status": "ok",
         "action": "send",
-        "summary": f"已发送 {args.repeat} 次到 {cfg['default_port']}@{cfg.get('default_baudrate')}",
+        "summary": f"已发送 {args.repeat} 次到 {cfg['port']}@{cfg['baudrate']}",
         "details": details,
     }
 
@@ -146,6 +156,13 @@ def main():
             print(f"TX[{r['seq']}]: {r['tx']}")
             if "rx" in r:
                 print(f"RX[{r['seq']}]: {r['rx']}")
+
+    # 更新状态
+    update_state_entry("last_serial_send", {
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "bytes_sent": len(payload) * args.repeat,
+    })
 
 
 if __name__ == "__main__":

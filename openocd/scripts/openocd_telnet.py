@@ -13,6 +13,21 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# 添加 runtime 模块路径
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from openocd_runtime import (
+    load_project_config,
+    save_project_config,
+    load_workspace_state,
+    get_state_entry,
+    workspace_root,
+    is_missing,
+)
 
 
 # ── OpenOCD 服务器启动（复用 openocd_gdb.py 模式） ──────────────────
@@ -255,16 +270,82 @@ def output_json(data: dict):
 ALL_ACTIONS = ["halt", "resume", "step", "reg", "read-mem", "write-mem", "bp", "rbp", "run-to"]
 
 
+def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> dict:
+    """解析 OpenOCD 工程级参数，优先级: CLI > 工程配置 > state.json"""
+    # board: CLI > 工程配置 > state
+    board = args.board
+    board_source = "cli"
+    if is_missing(board):
+        board = project_config.get("board")
+        board_source = "project_config"
+    if is_missing(board):
+        board = state_lookup.get("board")
+        board_source = "state"
+
+    # interface: CLI > 工程配置 > state
+    interface = args.interface
+    interface_source = "cli"
+    if is_missing(interface):
+        interface = project_config.get("interface")
+        interface_source = "project_config"
+    if is_missing(interface):
+        interface = state_lookup.get("interface")
+        interface_source = "state"
+
+    # target: CLI > 工程配置 > state
+    target = args.target
+    target_source = "cli"
+    if is_missing(target):
+        target = project_config.get("target")
+        target_source = "project_config"
+    if is_missing(target):
+        target = state_lookup.get("target")
+        target_source = "state"
+
+    # adapter_speed: CLI > 工程配置 > state
+    adapter_speed = args.adapter_speed
+    adapter_speed_source = "cli"
+    if is_missing(adapter_speed):
+        adapter_speed = project_config.get("adapter_speed")
+        adapter_speed_source = "project_config"
+    if is_missing(adapter_speed):
+        adapter_speed = state_lookup.get("adapter_speed")
+        adapter_speed_source = "state"
+
+    # transport: CLI > 工程配置 > state
+    transport = args.transport
+    transport_source = "cli"
+    if is_missing(transport):
+        transport = project_config.get("transport")
+        transport_source = "project_config"
+    if is_missing(transport):
+        transport = state_lookup.get("transport")
+        transport_source = "state"
+
+    return {
+        "board": board,
+        "board_source": board_source,
+        "interface": interface,
+        "interface_source": interface_source,
+        "target": target,
+        "target_source": target_source,
+        "adapter_speed": adapter_speed,
+        "adapter_speed_source": adapter_speed_source,
+        "transport": transport,
+        "transport_source": transport_source,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="OpenOCD Telnet 调试命令")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default="openocd", help="openocd 路径")
-    parser.add_argument("--board", default="", help="board 配置文件")
-    parser.add_argument("--interface", default="", help="interface 配置文件")
-    parser.add_argument("--target", default="", help="target 配置文件")
+    parser.add_argument("--board", default=None, help="board 配置文件")
+    parser.add_argument("--interface", default=None, help="interface 配置文件")
+    parser.add_argument("--target", default=None, help="target 配置文件")
     parser.add_argument("--search", default="", help="额外配置脚本搜索目录")
-    parser.add_argument("--adapter-speed", default="", help="调试速率 kHz")
-    parser.add_argument("--transport", default="", choices=["", "swd", "jtag"], help="传输协议")
+    parser.add_argument("--adapter-speed", default=None, help="调试速率 kHz")
+    parser.add_argument("--transport", default=None, choices=["", "swd", "jtag"], help="传输协议")
     parser.add_argument("--gdb-port", type=int, default=3333, help="GDB 端口")
     parser.add_argument("--telnet-port", type=int, default=4444, help="Telnet 端口")
     parser.add_argument("--address", default="", help="地址（read-mem/write-mem/bp/rbp/run-to 用）")
@@ -274,15 +355,36 @@ def main():
     parser.add_argument("--count", type=int, default=1, help="单步次数（step 用）")
     parser.add_argument("--timeout-ms", type=int, default=2000, help="run-to 等待超时毫秒数")
     parser.add_argument("--bp-length", type=int, default=2, help="断点长度（bp 用，Thumb=2/ARM=4）")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args()
 
+    # 解析工程级参数
+    workspace = workspace_root(args.workspace)
+    project_config = load_project_config(str(workspace))
+    state = load_workspace_state(str(workspace))
+    state_lookup = {
+        "board": get_state_entry(state, "last_debug").get("board") or get_state_entry(state, "last_flash").get("board"),
+        "interface": get_state_entry(state, "last_debug").get("interface") or get_state_entry(state, "last_flash").get("interface"),
+        "target": get_state_entry(state, "last_debug").get("target") or get_state_entry(state, "last_flash").get("target"),
+        "adapter_speed": get_state_entry(state, "last_debug").get("adapter_speed") or get_state_entry(state, "last_flash").get("adapter_speed"),
+        "transport": get_state_entry(state, "last_debug").get("transport") or get_state_entry(state, "last_flash").get("transport"),
+    }
+    oc_params = resolve_openocd_params(args, project_config, state_lookup)
+
+    # 使用解析后的参数
+    board = oc_params["board"]
+    interface = oc_params["interface"]
+    target = oc_params["target"]
+    adapter_speed = oc_params["adapter_speed"]
+    transport = oc_params["transport"]
+
     # 参数校验
-    if not args.board and not args.interface and not args.target:
+    if not board and not interface and not target:
         result = {
             "status": "error", "action": args.action,
-            "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target"},
+            "error": {"code": "missing_config", "message": "必须提供 --board 或 --interface + --target，或通过 .embeddedskills/config.json 配置"},
         }
         if args.as_json:
             output_json(result)
@@ -314,8 +416,8 @@ def main():
 
     # 构建 OpenOCD 命令并启动
     cmd = build_openocd_cmd(
-        exe=args.exe, board=args.board, interface=args.interface, target=args.target,
-        search=args.search, adapter_speed=args.adapter_speed, transport=args.transport,
+        exe=args.exe, board=board or "", interface=interface or "", target=target or "",
+        search=args.search, adapter_speed=adapter_speed or "", transport=transport or "",
         gdb_port=args.gdb_port, telnet_port=args.telnet_port,
     )
 
@@ -343,6 +445,16 @@ def main():
 
         # 执行调试命令
         result = execute_action(telnet, args)
+
+        # 成功执行后，写回确认过的参数到工程配置
+        if result.get("status") == "ok":
+            save_project_config(str(workspace), {
+                "board": board or "",
+                "interface": interface or "",
+                "target": target or "",
+                "adapter_speed": adapter_speed or "",
+                "transport": transport or "",
+            })
 
         if args.as_json:
             output_json(result)

@@ -21,6 +21,8 @@ Claude Code skill，用于基于 CMake + arm-none-eabi-gcc 的嵌入式工程扫
 
 ## 配置
 
+### 环境级配置（skill/config.json）
+
 复制 `config.example.json` 为 `config.json`，根据实际环境修改：
 
 ```json
@@ -28,9 +30,6 @@ Claude Code skill，用于基于 CMake + arm-none-eabi-gcc 的嵌入式工程扫
   "cmake_exe": "cmake",
   "toolchain_prefix": "arm-none-eabi-",
   "toolchain_path": "",
-  "default_project": "",
-  "default_preset": "",
-  "log_dir": ".build",
   "operation_mode": 1
 }
 ```
@@ -40,10 +39,36 @@ Claude Code skill，用于基于 CMake + arm-none-eabi-gcc 的嵌入式工程扫
 | `cmake_exe` | 否 | `cmake` 路径或命令名，默认从 PATH 查找 |
 | `toolchain_prefix` | 否 | 工具链前缀，默认 `arm-none-eabi-` |
 | `toolchain_path` | 否 | 工具链 bin 目录，为空时从 PATH 查找 |
-| `default_project` | 否 | 默认工程路径，为空时优先从 workspace 最近状态读取 |
-| `default_preset` | 否 | 默认 preset 名称，为空时需手动指定或先枚举 |
-| `log_dir` | 否 | 构建日志输出目录，默认 `.build` |
 | `operation_mode` | 否 | `1` 直接执行 / `2` 输出风险摘要 / `3` 执行前确认 |
+
+### 工程级配置（workspace/.embeddedskills/config.json）
+
+工程级共享配置保存在工作区的 `.embeddedskills/config.json` 中：
+
+```json
+{
+  "gcc": {
+    "project": "",
+    "preset": "",
+    "log_dir": ".embeddedskills/build"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `project` | 默认工程路径（相对 workspace） |
+| `preset` | 默认 CMake preset 名称 |
+| `log_dir` | 构建日志输出目录，默认 `.embeddedskills/build` |
+
+### 参数解析优先级
+
+参数解析顺序（从高到低）：
+1. CLI 显式参数
+2. 环境级配置（skill/config.json）
+3. 工程级配置（.embeddedskills/config.json）
+4. state.json（上次构建记录）
+5. 搜索/询问
 
 ## 子命令
 

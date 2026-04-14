@@ -23,15 +23,14 @@ Claude Code skill，通过 OpenOCD 进行探针探测、固件烧录、Flash 擦
 
 ## 配置
 
+### 环境级配置（skill/config.json）
+
 复制 `config.example.json` 为 `config.json`，根据实际环境修改：
 
 ```json
 {
   "exe": "openocd",
   "scripts_dir": "",
-  "default_board": "",
-  "default_interface": "interface/stlink.cfg",
-  "default_target": "target/stm32f4x.cfg",
   "gdb_port": 3333,
   "telnet_port": 4444,
   "gdb_exe": "",
@@ -43,15 +42,33 @@ Claude Code skill，通过 OpenOCD 进行探针探测、固件烧录、Flash 擦
 |------|------|------|
 | `exe` | 是 | openocd 路径或命令名 |
 | `scripts_dir` | 否 | OpenOCD 配置脚本目录，为空时使用内置路径 |
-| `default_board` | 否 | 默认 board 配置（如 `board/stm32f4discovery.cfg`），优先级高于 interface+target |
-| `default_interface` | 否 | 默认 interface 配置（如 `interface/stlink.cfg`） |
-| `default_target` | 否 | 默认 target 配置（如 `target/stm32f4x.cfg`） |
 | `gdb_port` | 否 | GDB Server 端口，默认 3333 |
 | `telnet_port` | 否 | Telnet 端口，默认 4444 |
 | `gdb_exe` | 否 | arm-none-eabi-gdb 路径，GDB 调试子命令需要 |
 | `operation_mode` | 否 | `1` 直接执行 / `2` 输出风险摘要 / `3` 执行前确认 |
 
-> 提示：设置了 `default_board` 时，`default_interface` 和 `default_target` 可以不填。
+### 工程级配置（.embeddedskills/config.json）
+
+board/interface/target 等工程参数统一在工作区的 `.embeddedskills/config.json` 中管理：
+
+```json
+{
+  "openocd": {
+    "board": "",
+    "interface": "interface/stlink.cfg",
+    "target": "target/stm32f4x.cfg",
+    "adapter_speed": "4000",
+    "transport": "swd",
+    "tpiu_name": "stm32f4x.tpiu",
+    "traceclk": "168000000",
+    "pin_freq": "2000000"
+  }
+}
+```
+
+参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+
+成功执行后，确认过的参数会自动写回工程配置。
 
 当前实现的基础命令还包括 `targets`、`flash-banks`、`adapter-info`、`raw` 和 `gdb-server`，观测命令除了 `semihosting` 还支持 `itm`。
 

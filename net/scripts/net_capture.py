@@ -12,50 +12,40 @@ import signal
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def check_tshark(exe):
-    try:
-        result = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+from net_runtime import (
+    get_net_config,
+    save_project_config,
+    update_state_entry,
+    check_tshark,
+)
 
 
 def build_tshark_cmd(config, args):
-    exe = config.get("tshark_exe", "tshark")
+    exe = config["tshark_exe"]
     cmd = [exe]
 
     # 接口
-    iface = config.get("default_interface", "")
+    iface = config["interface"]
     if iface:
         cmd += ["-i", str(iface)]
 
     # 抓包过滤器 (BPF)
-    capture_filter = config.get("default_capture_filter", "")
+    capture_filter = config["capture_filter"]
     if capture_filter:
         cmd += ["-f", capture_filter]
 
     # 显示过滤器
-    display_filter = config.get("default_display_filter", "")
+    display_filter = config["display_filter"]
     if display_filter:
         cmd += ["-Y", display_filter]
 
     # 持续时间
-    duration = config.get("default_duration", 30)
+    duration = config["duration"]
     cmd += ["-a", f"duration:{duration}"]
 
     # 输出文件
     if args.output:
-        fmt = args.format or config.get("default_capture_format", "pcapng")
+        fmt = args.format or config["capture_format"]
         cmd += ["-w", args.output]
         if fmt == "pcap":
             cmd += ["-F", "pcap"]
@@ -73,14 +63,25 @@ def build_tshark_cmd(config, args):
 
 def main():
     parser = argparse.ArgumentParser(description="tshark 抓包")
+    parser.add_argument("--interface", "-i", help="抓包接口")
+    parser.add_argument("--duration", type=int, help="抓包时长(秒)")
+    parser.add_argument("--capture-filter", "-f", help="抓包过滤器(BPF)")
+    parser.add_argument("--display-filter", "-Y", help="显示过滤器")
     parser.add_argument("--output", "-o", default="", help="保存抓包文件路径")
     parser.add_argument("--format", choices=["pcapng", "pcap"], help="抓包文件格式")
     parser.add_argument("--decode-as", default="", help="自定义解码规则")
     parser.add_argument("--json", action="store_true", dest="output_json", help="JSON Lines 输出")
     args = parser.parse_args()
 
-    config = load_config()
-    exe = config.get("tshark_exe", "tshark")
+    # 获取配置
+    config, sources = get_net_config(
+        cli_interface=args.interface,
+        cli_duration=args.duration,
+        cli_capture_filter=args.capture_filter,
+        cli_display_filter=args.display_filter,
+    )
+
+    exe = config["tshark_exe"]
 
     if not check_tshark(exe):
         error = {
@@ -94,21 +95,29 @@ def main():
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
 
-    iface = config.get("default_interface", "")
+    iface = config["interface"]
     if not iface:
         error = {
             "status": "error",
             "action": "capture",
             "error": {
                 "code": "no_interface",
-                "message": "config.json 中未配置 default_interface，请先设置抓包接口",
+                "message": "未配置抓包接口，请用 --interface 指定或在 .embeddedskills/config.json 中配置",
             },
         }
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
 
+    # 保存确认的配置
+    save_project_config(values={
+        "interface": iface,
+        "duration": config["duration"],
+        "capture_filter": config["capture_filter"],
+        "display_filter": config["display_filter"],
+    })
+
     cmd, _ = build_tshark_cmd(config, args)
-    duration = config.get("default_duration", 30)
+    duration = config["duration"]
 
     print(f"[net capture] 接口={iface}, 时长={duration}s", file=sys.stderr)
     if config.get("default_capture_filter"):
@@ -140,6 +149,14 @@ def main():
             summary["details"] = {"output_file": args.output, "file_size": size}
 
         print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr)
+
+        # 更新状态
+        update_state_entry("last_observe", {
+            "type": "net_capture",
+            "interface": iface,
+            "duration": duration,
+            "output_file": args.output if args.output and os.path.exists(args.output) else None,
+        })
 
     except KeyboardInterrupt:
         proc.terminate()

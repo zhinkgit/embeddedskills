@@ -25,7 +25,10 @@ from openocd_runtime import (  # noqa: E402
     default_config_path,
     emit_stream_record,
     get_state_entry,
+    is_missing,
     load_json_file,
+    load_local_config,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
@@ -34,6 +37,7 @@ from openocd_runtime import (  # noqa: E402
     output_json,
     parameter_context,
     resolve_param,
+    save_project_config,
     update_state_entry,
     workspace_root,
 )
@@ -137,6 +141,99 @@ def _state_lookup(state: dict) -> dict:
     }
 
 
+def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> dict:
+    """解析 OpenOCD 工程级参数，优先级: CLI > 工程配置 > state.json"""
+    # board: CLI > 工程配置 > state
+    board = args.board
+    board_source = "cli"
+    if is_missing(board):
+        board = project_config.get("board")
+        board_source = "project_config"
+    if is_missing(board):
+        board = state_lookup.get("board")
+        board_source = "state"
+
+    # interface: CLI > 工程配置 > state
+    interface = args.interface
+    interface_source = "cli"
+    if is_missing(interface):
+        interface = project_config.get("interface")
+        interface_source = "project_config"
+    if is_missing(interface):
+        interface = state_lookup.get("interface")
+        interface_source = "state"
+
+    # target: CLI > 工程配置 > state
+    target = args.target
+    target_source = "cli"
+    if is_missing(target):
+        target = project_config.get("target")
+        target_source = "project_config"
+    if is_missing(target):
+        target = state_lookup.get("target")
+        target_source = "state"
+
+    # adapter_speed: CLI > 工程配置 > state
+    adapter_speed = args.adapter_speed
+    adapter_speed_source = "cli"
+    if is_missing(adapter_speed):
+        adapter_speed = project_config.get("adapter_speed")
+        adapter_speed_source = "project_config"
+    if is_missing(adapter_speed):
+        adapter_speed = state_lookup.get("adapter_speed")
+        adapter_speed_source = "state"
+
+    # transport: CLI > 工程配置 > state
+    transport = args.transport
+    transport_source = "cli"
+    if is_missing(transport):
+        transport = project_config.get("transport")
+        transport_source = "project_config"
+    if is_missing(transport):
+        transport = state_lookup.get("transport")
+        transport_source = "state"
+
+    # tpiu_name: CLI > 工程配置
+    tpiu_name = args.tpiu_name
+    tpiu_name_source = "cli"
+    if is_missing(tpiu_name):
+        tpiu_name = project_config.get("tpiu_name")
+        tpiu_name_source = "project_config"
+
+    # traceclk: CLI > 工程配置
+    traceclk = args.traceclk
+    traceclk_source = "cli"
+    if is_missing(traceclk):
+        traceclk = project_config.get("traceclk")
+        traceclk_source = "project_config"
+
+    # pin_freq: CLI > 工程配置
+    pin_freq = args.pin_freq
+    pin_freq_source = "cli"
+    if is_missing(pin_freq):
+        pin_freq = project_config.get("pin_freq")
+        pin_freq_source = "project_config"
+
+    return {
+        "board": board,
+        "board_source": board_source,
+        "interface": interface,
+        "interface_source": interface_source,
+        "target": target,
+        "target_source": target_source,
+        "adapter_speed": adapter_speed,
+        "adapter_speed_source": adapter_speed_source,
+        "transport": transport,
+        "transport_source": transport_source,
+        "tpiu_name": tpiu_name,
+        "tpiu_name_source": tpiu_name_source,
+        "traceclk": traceclk,
+        "traceclk_source": traceclk_source,
+        "pin_freq": pin_freq,
+        "pin_freq_source": pin_freq_source,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="OpenOCD ITM 输出捕获")
     parser.add_argument("--exe", default=None, help="openocd 路径")
@@ -165,19 +262,36 @@ def main() -> None:
     config = load_json_file(config_path)
     state = load_workspace_state(str(workspace))
     state_lookup = _state_lookup(state)
+    project_config = load_project_config(str(workspace))
+
+    # 解析 OpenOCD 工程级参数
+    oc_params = resolve_openocd_params(args, project_config, state_lookup)
 
     parameter_sources: dict[str, str] = {}
     try:
         exe, parameter_sources["exe"] = resolve_param("exe", args.exe, config=config, config_keys=["exe"], required=True)
-        board, parameter_sources["board"] = resolve_param("board", args.board, config=config, config_keys=["default_board"], state_record=state_lookup, state_keys=["board"])
-        interface, parameter_sources["interface"] = resolve_param("interface", args.interface, config=config, config_keys=["default_interface"], state_record=state_lookup, state_keys=["interface"])
-        target, parameter_sources["target"] = resolve_param("target", args.target, config=config, config_keys=["default_target"], state_record=state_lookup, state_keys=["target"])
+
+        # 从工程配置或 state 解析 board/interface/target
+        board = oc_params["board"]
+        parameter_sources["board"] = oc_params["board_source"]
+        interface = oc_params["interface"]
+        parameter_sources["interface"] = oc_params["interface_source"]
+        target = oc_params["target"]
+        parameter_sources["target"] = oc_params["target_source"]
+        adapter_speed = oc_params["adapter_speed"]
+        parameter_sources["adapter_speed"] = oc_params["adapter_speed_source"]
+        transport = oc_params["transport"]
+        parameter_sources["transport"] = oc_params["transport_source"]
+
         search, parameter_sources["search"] = resolve_param("search", args.search, config=config, config_keys=["scripts_dir"], state_record=state_lookup, state_keys=["search"])
-        adapter_speed, parameter_sources["adapter_speed"] = resolve_param("adapter_speed", args.adapter_speed, config=config, config_keys=["adapter_speed"], state_record=state_lookup, state_keys=["adapter_speed"])
-        transport, parameter_sources["transport"] = resolve_param("transport", args.transport, config=config, config_keys=["transport"], state_record=state_lookup, state_keys=["transport"])
-        tpiu_name, parameter_sources["tpiu_name"] = resolve_param("tpiu_name", args.tpiu_name, config=config, config_keys=["tpiu_name"], required=True)
-        traceclk, parameter_sources["traceclk"] = resolve_param("traceclk", args.traceclk, config=config, config_keys=["traceclk"], required=True)
-        pin_freq, parameter_sources["pin_freq"] = resolve_param("pin_freq", args.pin_freq, config=config, config_keys=["pin_freq"])
+
+        # tpiu_name, traceclk, pin_freq 从工程配置解析
+        tpiu_name = oc_params["tpiu_name"]
+        parameter_sources["tpiu_name"] = oc_params["tpiu_name_source"]
+        traceclk = oc_params["traceclk"]
+        parameter_sources["traceclk"] = oc_params["traceclk_source"]
+        pin_freq = oc_params["pin_freq"]
+        parameter_sources["pin_freq"] = oc_params["pin_freq_source"]
     except ValueError as exc:
         result = make_result(
             status="error",
@@ -270,6 +384,17 @@ def main() -> None:
             },
             str(workspace),
         )
+        # 写回确认过的参数到工程配置
+        save_project_config(str(workspace), {
+            "board": board or "",
+            "interface": interface or "",
+            "target": target or "",
+            "adapter_speed": adapter_speed or "",
+            "transport": transport or "",
+            "tpiu_name": tpiu_name or "",
+            "traceclk": traceclk or "",
+            "pin_freq": pin_freq or "",
+        })
 
         while True:
             try:

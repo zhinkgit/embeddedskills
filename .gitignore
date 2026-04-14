@@ -8,5 +8,3 @@ config.json
 
 __pycache__
 .embeddedskills
-workflow/__pycache__
-shared/__pycache__

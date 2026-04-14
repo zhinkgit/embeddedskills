@@ -12,14 +12,12 @@ import sys
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+from net_runtime import (
+    get_net_config,
+    save_project_config,
+    update_state_entry,
+    check_tshark,
+)
 
 
 def check_tshark(exe):
@@ -109,17 +107,26 @@ def parse_endpoints(stdout):
 
 def main():
     parser = argparse.ArgumentParser(description="流量统计")
+    parser.add_argument("--interface", "-i", help="抓包接口")
+    parser.add_argument("--duration", type=int, help="统计时长(秒)")
+    parser.add_argument("--display-filter", "-Y", help="显示过滤器")
     parser.add_argument("--interval", type=int, default=1, help="统计间隔(秒)")
     parser.add_argument("--mode", default="overview",
                         choices=["overview", "protocol", "endpoint", "port"])
     parser.add_argument("--json", action="store_true", dest="output_json", help="JSON 输出")
     args = parser.parse_args()
 
-    config = load_config()
-    exe = config.get("tshark_exe", "tshark")
-    iface = config.get("default_interface", "")
-    duration = config.get("default_duration", 30)
-    display_filter = config.get("default_display_filter", "")
+    # 获取配置
+    config, sources = get_net_config(
+        cli_interface=args.interface,
+        cli_duration=args.duration,
+        cli_display_filter=args.display_filter,
+    )
+
+    exe = config["tshark_exe"]
+    iface = config["interface"]
+    duration = config["duration"]
+    display_filter = config["display_filter"]
 
     if not check_tshark(exe):
         error = {
@@ -137,10 +144,17 @@ def main():
         error = {
             "status": "error",
             "action": "stats",
-            "error": {"code": "no_interface", "message": "config.json 中未配置 default_interface"},
+            "error": {"code": "no_interface", "message": "未配置抓包接口，请用 --interface 指定或在 .embeddedskills/config.json 中配置"},
         }
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "interface": iface,
+        "duration": duration,
+        "display_filter": display_filter,
+    })
 
     print(f"[net stats] 接口={iface}, 时长={duration}s, 模式={args.mode}", file=sys.stderr)
 
@@ -198,6 +212,14 @@ def main():
             print("\n  端点:")
             for e in details["endpoints"][:15]:
                 print(f"    {e['address']}: {e['packets']} pkts, {e['bytes']} bytes")
+
+    # 更新状态
+    update_state_entry("last_observe", {
+        "type": "net_stats",
+        "interface": iface,
+        "duration": duration,
+        "mode": args.mode,
+    })
 
 
 if __name__ == "__main__":

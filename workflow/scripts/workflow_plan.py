@@ -13,11 +13,11 @@ if str(ROOT_DIR) not in sys.path:
 
 from workflow_runtime import (  # noqa: E402
     get_state_entry,
-    load_json_file,
+    load_full_project_config,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
-    normalize_path,
     now_iso,
     output_json,
     parameter_context,
@@ -37,15 +37,16 @@ def discover_projects(root: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="workflow plan")
     parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
-    parser.add_argument("--config", default=None, help="workflow config.json 路径")
+    parser.add_argument("--config", default=None, help="workflow config.json 路径（已废弃，仅保留兼容性）")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
     started_at = now_iso()
     started_ts = __import__("time").time()
     workspace = workspace_root(args.workspace)
-    config_path = normalize_path(args.config or str(workspace / "workflow" / "config.json"))
-    config = load_json_file(config_path)
+    # 从 .embeddedskills/config.json 读取配置
+    full_config = load_full_project_config(str(workspace))
+    workflow_config = load_project_config(str(workspace))
     state = load_workspace_state(str(workspace))
     discovery = discover_projects(workspace)
 
@@ -54,6 +55,14 @@ def main() -> None:
         build_candidates.append("keil")
     if discovery["gcc_projects"]:
         build_candidates.append("gcc")
+
+    # 从配置中读取 preferred 设置
+    preferred = {
+        "build": workflow_config.get("preferred_build", "auto"),
+        "flash": workflow_config.get("preferred_flash", "auto"),
+        "debug": workflow_config.get("preferred_debug", "auto"),
+        "observe": workflow_config.get("preferred_observe", "auto"),
+    }
 
     result = make_result(
         status="ok",
@@ -65,8 +74,9 @@ def main() -> None:
             "flash_candidates": ["jlink", "openocd"],
             "debug_candidates": ["jlink", "openocd"],
             "observe_candidates": ["jlink:rtt", "openocd:semihosting", "jlink:swo", "openocd:itm"],
+            "preferred": preferred,
         },
-        context=parameter_context(provider="workflow", workspace=str(workspace), config_path=config_path),
+        context=parameter_context(provider="workflow", workspace=str(workspace)),
         metrics={
             "keil_projects": len(discovery["keil_projects"]),
             "gcc_projects": len(discovery["gcc_projects"]),
@@ -88,6 +98,7 @@ def main() -> None:
         print(result["summary"])
         print(f"workspace: {workspace}")
         print(f"keil: {len(discovery['keil_projects'])}, gcc: {len(discovery['gcc_projects'])}")
+        print(f"preferred: build={preferred['build']}, flash={preferred['flash']}, debug={preferred['debug']}, observe={preferred['observe']}")
 
 
 if __name__ == "__main__":

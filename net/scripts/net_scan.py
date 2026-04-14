@@ -12,6 +12,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+from net_runtime import (
+    get_net_config,
+    save_project_config,
+    update_state_entry,
+)
+
 
 # 嵌入式常用端口
 DEFAULT_PORTS = [
@@ -19,15 +25,6 @@ DEFAULT_PORTS = [
     443, 502, 554, 1883, 2404, 4840, 5060, 5683, 8080, 8443,
     8883, 20000, 44818, 47808,
 ]
-
-
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
 
 
 def parse_ports(port_str):
@@ -91,25 +88,40 @@ PORT_SERVICE_MAP = {
 
 def main():
     parser = argparse.ArgumentParser(description="端口扫描")
+    parser.add_argument("--target", "-t", help="目标地址")
+    parser.add_argument("--ports", "-p", help="端口列表 (如 '80,443,8000-8100')")
     parser.add_argument("--timeout", type=int, default=0, help="超时(毫秒)")
     parser.add_argument("--banner", action="store_true", help="获取 Banner")
     parser.add_argument("--concurrent", type=int, default=20, help="并发线程数")
     parser.add_argument("--json", action="store_true", dest="output_json", help="JSON 输出")
     args = parser.parse_args()
 
-    config = load_config()
-    target = config.get("default_target", "")
-    timeout_ms = args.timeout if args.timeout > 0 else config.get("default_timeout_ms", 1000)
-    port_str = config.get("default_scan_ports", "")
+    # 获取配置
+    config, sources = get_net_config(
+        cli_target=args.target,
+        cli_timeout_ms=args.timeout if args.timeout > 0 else None,
+        cli_scan_ports=args.ports,
+    )
+
+    target = config["target"]
+    timeout_ms = config["timeout_ms"]
+    port_str = config["scan_ports"]
 
     if not target:
         error = {
             "status": "error",
             "action": "scan",
-            "error": {"code": "no_target", "message": "config.json 中未配置 default_target"},
+            "error": {"code": "no_target", "message": "未配置目标地址，请用 --target 指定或在 .embeddedskills/config.json 中配置"},
         }
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "target": target,
+        "timeout_ms": timeout_ms,
+        "scan_ports": port_str,
+    })
 
     ports = parse_ports(port_str)
     open_ports = []
@@ -151,6 +163,13 @@ def main():
                 print(f"  {p['port']:<8} {p['state']:<8} {p['service']:<16} {banner}")
         else:
             print("  未发现开放端口")
+
+    # 更新状态
+    update_state_entry("last_net_scan", {
+        "target": target,
+        "ports_scanned": len(ports),
+        "open_count": len(open_ports),
+    })
 
 
 if __name__ == "__main__":

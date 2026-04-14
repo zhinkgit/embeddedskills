@@ -6,14 +6,12 @@ import sys
 import time
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent.parent / "config.json"
-
-
-def load_config():
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+from can_runtime import (
+    get_can_config,
+    open_can_bus,
+    save_project_config,
+    update_state_entry,
+)
 
 
 def parse_hex_data(s):
@@ -62,32 +60,52 @@ def main():
             print(f"错误: {err['error']['message']}", file=sys.stderr)
         sys.exit(1)
 
-    config = load_config()
-    interface = config.get("default_interface", "")
-    channel = config.get("default_channel", "")
-    bitrate = config.get("default_bitrate", 0)
-    data_bitrate = config.get("default_data_bitrate", 0)
+    # 获取配置
+    config, sources = get_can_config(
+        cli_interface=args.interface,
+        cli_channel=args.channel,
+        cli_bitrate=args.bitrate,
+        cli_data_bitrate=args.data_bitrate,
+    )
 
-    if not interface or not channel:
-        err = {"status": "error", "action": "send", "error": {"code": "config_missing", "message": "config.json 缺少 default_interface 或 default_channel"}}
+    if config is None:
+        if sources.get("need_selection"):
+            err = {"status": "error", "action": "send", "error": {"code": "multiple_candidates", "message": f"{sources['error']}，请用 --interface 和 --channel 指定"}}
+        else:
+            err = {"status": "error", "action": "send", "error": {"code": "config_error", "message": sources.get("error", "配置错误")}}
         if args.json:
             output_json(err)
         else:
             print(f"错误: {err['error']['message']}", file=sys.stderr)
         sys.exit(1)
 
+    interface = config["interface"]
+    channel = config["channel"]
+    bitrate = config["bitrate"]
+    data_bitrate = config["data_bitrate"]
+
+    # 保存确认的配置
+    save_project_config(values={
+        "interface": interface,
+        "channel": channel,
+        "bitrate": bitrate,
+        "data_bitrate": data_bitrate,
+    })
+
     arb_id = int(args.id, 0)
     data = parse_hex_data(args.data) if not args.remote else b""
 
-    bus_kwargs = {"interface": interface, "channel": channel}
-    if bitrate:
-        bus_kwargs["bitrate"] = bitrate
-    if args.fd and data_bitrate:
-        bus_kwargs["fd"] = True
-        bus_kwargs["data_bitrate"] = data_bitrate
-
     try:
-        bus = can.Bus(**bus_kwargs)
+        bus = open_can_bus(config)
+        if args.fd and data_bitrate:
+            # 重新打开以启用 FD 模式
+            bus = can.Bus(
+                interface=interface,
+                channel=channel,
+                bitrate=bitrate,
+                fd=True,
+                data_bitrate=data_bitrate,
+            )
     except Exception as e:
         err = {"status": "error", "action": "send", "error": {"code": "interface_open_failed", "message": str(e)}}
         if args.json:
@@ -175,6 +193,14 @@ def main():
         print(f"\n已发送 {tx_count} 帧: 0x{arb_id:03X} [{len(data)}] {format_data(data)}")
         if args.listen:
             print(f"收到 {len(rx_list)} 帧响应")
+
+    # 更新状态
+    update_state_entry("last_can_send", {
+        "interface": interface,
+        "channel": channel,
+        "id": f"0x{arb_id:03X}",
+        "count": tx_count,
+    })
 
 
 if __name__ == "__main__":

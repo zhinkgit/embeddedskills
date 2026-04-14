@@ -9,30 +9,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+from serial_runtime import (
+    get_serial_config,
+    open_serial_port,
+    save_project_config,
+    update_state_entry,
+    make_timing,
+)
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
-
-
-def load_config():
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def open_serial(cfg):
-    import serial
-
-    parity = PARITY_MAP.get(cfg.get("default_parity", "none"), "N")
-    return serial.Serial(
-        port=cfg["default_port"],
-        baudrate=cfg.get("default_baudrate", 115200),
-        bytesize=cfg.get("default_bytesize", 8),
-        parity=parity,
-        stopbits=cfg.get("default_stopbits", 1),
-        timeout=cfg.get("default_timeout_sec", 1.0),
-    )
 
 
 def output_json(obj):
@@ -52,6 +37,12 @@ def error_exit(action, code, message, use_json):
 
 def main():
     parser = argparse.ArgumentParser(description="串口实时文本监控")
+    parser.add_argument("--port", help="串口号 (如 COM3)")
+    parser.add_argument("--baudrate", type=int, help="波特率")
+    parser.add_argument("--bytesize", type=int, help="数据位")
+    parser.add_argument("--parity", help="校验位 (none/even/odd)")
+    parser.add_argument("--stopbits", type=int, help="停止位")
+    parser.add_argument("--encoding", help="编码")
     parser.add_argument("--timestamp", action="store_true", help="显示时间戳")
     parser.add_argument("--filter", help="正则过滤（仅显示匹配行）")
     parser.add_argument("--exclude", help="正则排除（隐藏匹配行）")
@@ -59,11 +50,34 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON Lines 输出")
     args = parser.parse_args()
 
-    cfg = load_config()
-    if not cfg.get("default_port"):
-        error_exit("monitor", "no_port", "config.json 中未配置 default_port", args.json)
-    if not cfg.get("default_baudrate"):
-        error_exit("monitor", "no_baudrate", "config.json 中未配置 default_baudrate", args.json)
+    start_time = time.time()
+
+    # 获取配置
+    cfg, sources = get_serial_config(
+        cli_port=args.port,
+        cli_baudrate=args.baudrate,
+        cli_bytesize=args.bytesize,
+        cli_parity=args.parity,
+        cli_stopbits=args.stopbits,
+        cli_encoding=args.encoding,
+    )
+
+    if cfg is None:
+        if sources.get("need_selection"):
+            # 多候选情况
+            error_exit("monitor", "multiple_candidates", f"{sources['error']}，请用 --port 指定", args.json)
+        else:
+            error_exit("monitor", "config_error", sources.get("error", "配置错误"), args.json)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "bytesize": cfg["bytesize"],
+        "parity": cfg["parity"],
+        "stopbits": cfg["stopbits"],
+        "encoding": cfg["encoding"],
+    })
 
     include_re = None
     exclude_re = None
@@ -79,12 +93,11 @@ def main():
             error_exit("monitor", "bad_regex", f"无效正则: {args.exclude}", args.json)
 
     try:
-        ser = open_serial(cfg)
+        ser = open_serial_port(cfg)
     except Exception as e:
         error_exit("monitor", "connect_failed", str(e), args.json)
 
     line_count = 0
-    start_time = time.time()
     running = True
 
     def on_signal(sig, frame):
@@ -94,7 +107,7 @@ def main():
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
 
-    encoding = cfg.get("default_encoding", "utf-8")
+    encoding = cfg.get("encoding", "utf-8")
 
     try:
         while running:
@@ -128,8 +141,8 @@ def main():
             now = datetime.now().isoformat(timespec="milliseconds")
 
             if args.json:
-                output_json({"timestamp": now, "port": cfg["default_port"],
-                             "baudrate": cfg.get("default_baudrate"), "text": text})
+                output_json({"timestamp": now, "port": cfg["port"],
+                             "baudrate": cfg["baudrate"], "text": text})
             else:
                 prefix = f"[{now}] " if args.timestamp else ""
                 print(f"{prefix}{text}")
@@ -143,6 +156,15 @@ def main():
     summary = f"监控结束，共 {line_count} 行，耗时 {duration}s\n"
     sys.stderr.buffer.write(summary.encode("utf-8"))
     sys.stderr.buffer.flush()
+
+    # 更新状态
+    update_state_entry("last_observe", {
+        "type": "serial_monitor",
+        "port": cfg["port"],
+        "baudrate": cfg["baudrate"],
+        "lines": line_count,
+        "duration_sec": duration,
+    })
 
 
 if __name__ == "__main__":

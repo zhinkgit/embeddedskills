@@ -15,14 +15,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+from net_runtime import (
+    get_net_config,
+    save_project_config,
+    update_state_entry,
+)
 
 
 def icmp_ping(target, count=4, timeout_ms=1000):
@@ -105,25 +102,38 @@ def traceroute(target, timeout_ms=1000):
 
 def main():
     parser = argparse.ArgumentParser(description="连通性测试")
+    parser.add_argument("--target", "-t", help="目标地址")
     parser.add_argument("--tcp", type=int, default=0, help="TCP 端口")
     parser.add_argument("--count", type=int, default=4, help="ping 次数")
     parser.add_argument("--traceroute", action="store_true", help="路由追踪")
     parser.add_argument("--concurrent", type=int, default=4, help="并发线程数")
+    parser.add_argument("--timeout", type=int, help="超时(毫秒)")
     parser.add_argument("--json", action="store_true", dest="output_json", help="JSON 输出")
     args = parser.parse_args()
 
-    config = load_config()
-    target = config.get("default_target", "")
-    timeout_ms = config.get("default_timeout_ms", 1000)
+    # 获取配置
+    config, sources = get_net_config(
+        cli_target=args.target,
+        cli_timeout_ms=args.timeout,
+    )
+
+    target = config["target"]
+    timeout_ms = config["timeout_ms"]
 
     if not target:
         error = {
             "status": "error",
             "action": "ping",
-            "error": {"code": "no_target", "message": "config.json 中未配置 default_target"},
+            "error": {"code": "no_target", "message": "未配置目标地址，请用 --target 指定或在 .embeddedskills/config.json 中配置"},
         }
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
+
+    # 保存确认的配置
+    save_project_config(values={
+        "target": target,
+        "timeout_ms": timeout_ms,
+    })
 
     # 支持逗号分隔的多目标
     targets = [t.strip() for t in target.split(",") if t.strip()]
@@ -182,6 +192,13 @@ def main():
                 if r.get("error"):
                     line += f"  ({r['error']})"
                 print(line)
+
+    # 更新状态
+    update_state_entry("last_net_ping", {
+        "target": target,
+        "reachable_count": reachable_count,
+        "total": total,
+    })
 
 
 if __name__ == "__main__":

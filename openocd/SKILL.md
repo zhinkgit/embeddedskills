@@ -18,41 +18,57 @@ Telnet 在线调试、GDB 源码级调试和 Semihosting 输出捕获能力。
 
 ## 配置
 
-skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `exe` 路径正确：
+### 环境级配置（skill/config.json）
+
+skill 目录下的 `config.json` 包含环境级配置（工具路径、端口号等），首次使用前确认 `exe` 路径正确：
 
 ```json
 {
   "exe": "openocd",
   "scripts_dir": "",
-  "default_board": "",
-  "default_interface": "interface/stlink.cfg",
-  "default_target": "target/stm32f4x.cfg",
-  "default_file": "",
-  "adapter_speed": "",
-  "transport": "",
   "gdb_port": 3333,
   "telnet_port": 4444,
   "gdb_exe": "",
-  "default_elf": "",
-  "tpiu_name": "",
-  "traceclk": "",
-  "pin_freq": "",
   "operation_mode": 1
 }
 ```
 
 - `exe`：openocd.exe 路径或命令名（必填）
 - `scripts_dir`：OpenOCD 配置脚本目录，为空时使用 OpenOCD 内置路径
-- `default_board`：默认 board 配置（如 `board/stm32f4discovery.cfg`），优先级高于 interface+target
-- `default_interface`：默认 interface 配置（如 `interface/stlink.cfg`）
-- `default_target`：默认 target 配置（如 `target/stm32f4x.cfg`）
-- `default_file` / `default_elf`：默认固件/ELF；为空时优先读取 `.embeddedskills/state.json`
-- `adapter_speed` / `transport`：默认调试链路参数
 - `gdb_port`：GDB Server 端口，默认 3333
 - `telnet_port`：Telnet 端口，默认 4444
 - `gdb_exe`：arm-none-eabi-gdb 路径，GDB 调试子命令（run/backtrace/locals）需要
-- `tpiu_name` / `traceclk` / `pin_freq`：ITM/SWO 观测所需的 TPIU 参数
 - `operation_mode`：`1` 直接执行 / `2` 输出风险摘要但不阻塞 / `3` 执行前确认
+
+### 工程级配置（.embeddedskills/config.json）
+
+board/interface/target 等工程参数统一在工作区的 `.embeddedskills/config.json` 中管理：
+
+```json
+{
+  "openocd": {
+    "board": "",
+    "interface": "interface/stlink.cfg",
+    "target": "target/stm32f4x.cfg",
+    "adapter_speed": "4000",
+    "transport": "swd",
+    "tpiu_name": "stm32f4x.tpiu",
+    "traceclk": "168000000",
+    "pin_freq": "2000000"
+  }
+}
+```
+
+- `board`：board 配置（如 `board/stm32f4discovery.cfg`），优先级高于 interface+target
+- `interface`：interface 配置（如 `interface/stlink.cfg`）
+- `target`：target 配置（如 `target/stm32f4x.cfg`）
+- `adapter_speed`：调试速率 kHz
+- `transport`：传输协议（swd/jtag）
+- `tpiu_name` / `traceclk` / `pin_freq`：ITM/SWO 观测所需的 TPIU 参数
+
+参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+
+成功执行后，确认过的参数会自动写回工程配置。
 
 ## 子命令
 
@@ -99,13 +115,16 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 
 ## 执行流程
 
-1. 读取 `config.json`，确认 `exe` 路径有效
-2. 读取默认 `board / interface / target` 配置
-3. 已知 `board` 时优先使用 `-f board/*.cfg`，否则组合 `-f interface/*.cfg -f target/*.cfg`
-4. `board`、`interface`、`target` 同时缺失时，不自动拼接组合，直接要求用户补充
-5. 按 `operation_mode` 决定是否需要确认后执行
-6. 根据子命令调用对应脚本
-7. 统一解析输出中的 `Info`、`Error` 和就绪日志，返回结构化结果
+1. 读取 `skill/config.json`，确认 `exe` 路径有效
+2. 读取 `.embeddedskills/config.json` 获取工程级配置（board/interface/target 等）
+3. 读取 `.embeddedskills/state.json` 获取历史状态
+4. 参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+5. 已知 `board` 时优先使用 `-f board/*.cfg`，否则组合 `-f interface/*.cfg -f target/*.cfg`
+6. `board`、`interface`、`target` 同时缺失时，不自动拼接组合，直接要求用户补充
+7. 按 `operation_mode` 决定是否需要确认后执行
+8. 根据子命令调用对应脚本
+9. 统一解析输出中的 `Info`、`Error` 和就绪日志，返回结构化结果
+10. 成功执行后，将确认过的参数写回 `.embeddedskills/config.json`
 
 ## 脚本调用
 
@@ -307,7 +326,7 @@ GDB 调用栈示例：
 
 - 不自动猜测 `board`、`interface`、`target` 的组合，缺失时必须询问用户
 - 已知 `board` 时优先使用 board 配置，不再需要 interface+target
-- 参数解析优先级为：CLI 显式参数 > `config.json` > `.embeddedskills/state.json` > 报错
+- 参数解析优先级为：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
 - `.bin` 文件必须显式提供烧录地址，缺失时报错
 - STM32F4 等已映射 target 在 `erase --mode auto` 下会先 `reset halt`，再优先使用 mass erase
 - `erase --mode mass` 在未命中映射时直接返回 `mass_erase_unsupported`，避免误以为已做整片擦除
@@ -319,6 +338,8 @@ GDB 调用栈示例：
 - Telnet 调试命令每次启动独立的 OpenOCD Server，执行完自动关闭
 - Semihosting 通过 Telnet 启用后持续读取 OpenOCD stderr 输出
 - 结果回显中始终包含 cfg 组合、端口和执行动作
+- 产物路径（elf/file）不进入工程配置，仍只依赖 `state.json`
+- `last_flash`/`last_debug`/`last_observe` 等运行状态继续写入 `state.json`
 
 ## 参考
 

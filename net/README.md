@@ -20,20 +20,14 @@ Claude Code skill，用于嵌入式网络通信调试：接口发现、抓包、
 
 ## 配置
 
-复制 `config.example.json` 为 `config.json`，根据实际环境修改：
+### 环境级配置 (`config.json`)
+
+仅保留工具路径相关的环境级配置：
 
 ```json
 {
   "tshark_exe": "tshark",
-  "capinfos_exe": "capinfos",
-  "default_interface": "",
-  "default_target": "",
-  "default_capture_filter": "",
-  "default_display_filter": "",
-  "default_duration": 30,
-  "default_timeout_ms": 1000,
-  "default_scan_ports": "",
-  "default_capture_format": "pcapng"
+  "capinfos_exe": "capinfos"
 }
 ```
 
@@ -41,11 +35,46 @@ Claude Code skill，用于嵌入式网络通信调试：接口发现、抓包、
 |------|------|------|
 | `tshark_exe` | 是 | tshark 路径或命令名 |
 | `capinfos_exe` | 否 | capinfos 路径或命令名 |
-| `default_interface` | 否 | 默认抓包接口（用 `iface` 子命令查看可用接口） |
-| `default_target` | 否 | 默认目标 IP，多个用逗号分隔 |
-| `default_capture_filter` | 否 | 默认抓包过滤器（BPF 语法） |
-| `default_display_filter` | 否 | 默认显示过滤器（Wireshark 语法） |
-| `default_duration` | 否 | 默认抓包/统计时长（秒），默认 30 |
-| `default_timeout_ms` | 否 | ping/scan 超时毫秒数，默认 1000 |
-| `default_scan_ports` | 否 | 默认扫描端口范围，为空时使用嵌入式常用端口集 |
-| `default_capture_format` | 否 | 抓包格式：`pcapng` 或 `pcap`，默认 `pcapng` |
+
+### 工程级配置 (`.embeddedskills/config.json`)
+
+工作区下的 `.embeddedskills/config.json` 存放工程级网络配置：
+
+```json
+{
+  "net": {
+    "interface": "",
+    "target": "",
+    "capture_filter": "",
+    "display_filter": "",
+    "duration": 30,
+    "timeout_ms": 1000,
+    "scan_ports": "",
+    "capture_format": "pcapng",
+    "log_dir": ".embeddedskills/logs/net"
+  }
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `interface` | 否 | 默认抓包接口（用 `iface` 子命令查看可用接口） |
+| `target` | 否 | 默认目标 IP，多个用逗号分隔 |
+| `capture_filter` | 否 | 默认抓包过滤器（BPF 语法） |
+| `display_filter` | 否 | 默认显示过滤器（Wireshark 语法） |
+| `duration` | 否 | 默认抓包/统计时长（秒），默认 30 |
+| `timeout_ms` | 否 | ping/scan 超时毫秒数，默认 1000 |
+| `scan_ports` | 否 | 默认扫描端口范围，为空时使用嵌入式常用端口集 |
+| `capture_format` | 否 | 抓包格式：`pcapng` 或 `pcap`，默认 `pcapng` |
+| `log_dir` | 否 | 日志输出目录，默认 `.embeddedskills/logs/net` |
+
+### 参数解析优先级
+
+1. **CLI 参数** (`--interface`, `--target` 等) - 最高优先级
+2. **工程级配置** (`.embeddedskills/config.json` 中的 `net` 部分)
+3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+4. **默认值** - 最低优先级
+
+### 配置写回
+
+成功执行后，确认的参数会自动写回 `.embeddedskills/config.json`，方便下次使用。

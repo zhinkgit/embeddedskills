@@ -20,7 +20,10 @@ from openocd_runtime import (  # noqa: E402
     emit_stream_record,
     default_config_path,
     get_state_entry,
+    is_missing,
     load_json_file,
+    load_local_config,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
@@ -29,6 +32,7 @@ from openocd_runtime import (  # noqa: E402
     output_json,
     parameter_context,
     resolve_param,
+    save_project_config,
     update_state_entry,
     workspace_root,
 )
@@ -187,6 +191,72 @@ def _state_lookup(state: dict) -> dict:
     }
 
 
+def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> dict:
+    """解析 OpenOCD 工程级参数，优先级: CLI > 工程配置 > state.json"""
+    # board: CLI > 工程配置 > state
+    board = args.board
+    board_source = "cli"
+    if is_missing(board):
+        board = project_config.get("board")
+        board_source = "project_config"
+    if is_missing(board):
+        board = state_lookup.get("board")
+        board_source = "state"
+
+    # interface: CLI > 工程配置 > state
+    interface = args.interface
+    interface_source = "cli"
+    if is_missing(interface):
+        interface = project_config.get("interface")
+        interface_source = "project_config"
+    if is_missing(interface):
+        interface = state_lookup.get("interface")
+        interface_source = "state"
+
+    # target: CLI > 工程配置 > state
+    target = args.target
+    target_source = "cli"
+    if is_missing(target):
+        target = project_config.get("target")
+        target_source = "project_config"
+    if is_missing(target):
+        target = state_lookup.get("target")
+        target_source = "state"
+
+    # adapter_speed: CLI > 工程配置 > state
+    adapter_speed = args.adapter_speed
+    adapter_speed_source = "cli"
+    if is_missing(adapter_speed):
+        adapter_speed = project_config.get("adapter_speed")
+        adapter_speed_source = "project_config"
+    if is_missing(adapter_speed):
+        adapter_speed = state_lookup.get("adapter_speed")
+        adapter_speed_source = "state"
+
+    # transport: CLI > 工程配置 > state
+    transport = args.transport
+    transport_source = "cli"
+    if is_missing(transport):
+        transport = project_config.get("transport")
+        transport_source = "project_config"
+    if is_missing(transport):
+        transport = state_lookup.get("transport")
+        transport_source = "state"
+
+    return {
+        "board": board,
+        "board_source": board_source,
+        "interface": interface,
+        "interface_source": interface_source,
+        "target": target,
+        "target_source": target_source,
+        "adapter_speed": adapter_speed,
+        "adapter_speed_source": adapter_speed_source,
+        "transport": transport,
+        "transport_source": transport_source,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="OpenOCD Semihosting 输出捕获")
     parser.add_argument("--exe", default=None, help="openocd 路径")
@@ -211,34 +281,27 @@ def main() -> None:
     config = load_json_file(config_path)
     state = load_workspace_state(str(workspace))
     state_lookup = _state_lookup(state)
+    project_config = load_project_config(str(workspace))
+
+    # 解析 OpenOCD 工程级参数
+    oc_params = resolve_openocd_params(args, project_config, state_lookup)
 
     parameter_sources: dict[str, str] = {}
     try:
         exe, parameter_sources["exe"] = resolve_param("exe", args.exe, config=config, config_keys=["exe"], required=True)
-        board, parameter_sources["board"] = resolve_param(
-            "board",
-            args.board,
-            config=config,
-            config_keys=["default_board"],
-            state_record=state_lookup,
-            state_keys=["board"],
-        )
-        interface, parameter_sources["interface"] = resolve_param(
-            "interface",
-            args.interface,
-            config=config,
-            config_keys=["default_interface"],
-            state_record=state_lookup,
-            state_keys=["interface"],
-        )
-        target, parameter_sources["target"] = resolve_param(
-            "target",
-            args.target,
-            config=config,
-            config_keys=["default_target"],
-            state_record=state_lookup,
-            state_keys=["target"],
-        )
+
+        # 从工程配置或 state 解析 board/interface/target
+        board = oc_params["board"]
+        parameter_sources["board"] = oc_params["board_source"]
+        interface = oc_params["interface"]
+        parameter_sources["interface"] = oc_params["interface_source"]
+        target = oc_params["target"]
+        parameter_sources["target"] = oc_params["target_source"]
+        adapter_speed = oc_params["adapter_speed"]
+        parameter_sources["adapter_speed"] = oc_params["adapter_speed_source"]
+        transport = oc_params["transport"]
+        parameter_sources["transport"] = oc_params["transport_source"]
+
         search, parameter_sources["search"] = resolve_param(
             "search",
             args.search,
@@ -246,22 +309,6 @@ def main() -> None:
             config_keys=["scripts_dir"],
             state_record=state_lookup,
             state_keys=["search"],
-        )
-        adapter_speed, parameter_sources["adapter_speed"] = resolve_param(
-            "adapter_speed",
-            args.adapter_speed,
-            config=config,
-            config_keys=["adapter_speed"],
-            state_record=state_lookup,
-            state_keys=["adapter_speed"],
-        )
-        transport, parameter_sources["transport"] = resolve_param(
-            "transport",
-            args.transport,
-            config=config,
-            config_keys=["transport"],
-            state_record=state_lookup,
-            state_keys=["transport"],
         )
         gdb_port, parameter_sources["gdb_port"] = resolve_param(
             "gdb_port",
@@ -380,6 +427,14 @@ def main() -> None:
             },
             str(workspace),
         )
+        # 写回确认过的参数到工程配置
+        save_project_config(str(workspace), {
+            "board": board or "",
+            "interface": interface or "",
+            "target": target or "",
+            "adapter_speed": adapter_speed or "",
+            "transport": transport or "",
+        })
 
         if not args.as_json:
             print("Semihosting 已启用，等待输出（Ctrl+C 退出）:", file=sys.stderr, flush=True)

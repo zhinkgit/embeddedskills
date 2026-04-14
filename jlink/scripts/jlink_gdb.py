@@ -21,7 +21,10 @@ from jlink_runtime import (  # noqa: E402
     build_artifacts,
     default_config_path,
     get_state_entry,
+    is_missing,
     load_json_file,
+    load_local_config,
+    load_project_config,
     load_workspace_state,
     make_result,
     make_timing,
@@ -30,6 +33,7 @@ from jlink_runtime import (  # noqa: E402
     output_json,
     parameter_context,
     resolve_param,
+    save_project_config,
     update_state_entry,
     workspace_root,
 )
@@ -177,6 +181,54 @@ def _state_lookup(state: dict) -> dict:
     }
 
 
+def resolve_device_params(args, project_config: dict, state_lookup: dict) -> dict:
+    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > state.json > default"""
+    # device: CLI > 工程配置 > state > 报错
+    device = args.device
+    device_source = "cli"
+    if is_missing(device):
+        device = project_config.get("device")
+        device_source = "project_config"
+    if is_missing(device):
+        device = state_lookup.get("device")
+        device_source = "state"
+
+    # interface: CLI > 工程配置 > state > 默认 SWD
+    interface = args.interface
+    interface_source = "cli"
+    if is_missing(interface):
+        interface = project_config.get("interface")
+        interface_source = "project_config"
+    if is_missing(interface):
+        interface = state_lookup.get("interface")
+        interface_source = "state"
+    if is_missing(interface):
+        interface = "SWD"
+        interface_source = "default"
+
+    # speed: CLI > 工程配置 > state > 默认 4000
+    speed = args.speed
+    speed_source = "cli"
+    if is_missing(speed):
+        speed = project_config.get("speed")
+        speed_source = "project_config"
+    if is_missing(speed):
+        speed = state_lookup.get("speed")
+        speed_source = "state"
+    if is_missing(speed):
+        speed = "4000"
+        speed_source = "default"
+
+    return {
+        "device": device,
+        "device_source": device_source,
+        "interface": interface,
+        "interface_source": interface_source,
+        "speed": speed,
+        "speed_source": speed_source,
+    }
+
+
 def _summary(command: str, parsed: dict) -> str:
     if command == "backtrace" and parsed.get("frames"):
         return f"backtrace 完成，frames={len(parsed['frames'])}"
@@ -218,6 +270,10 @@ def main() -> None:
     config = load_json_file(config_path)
     state = load_workspace_state(str(workspace))
     state_lookup = _state_lookup(state)
+    project_config = load_project_config(str(workspace))
+
+    # 解析 device/interface/speed 参数
+    dev_params = resolve_device_params(args, project_config, state_lookup)
 
     parameter_sources: dict[str, str] = {}
     try:
@@ -237,15 +293,12 @@ def main() -> None:
             required=True,
             normalize_as_path=True,
         )
-        device, parameter_sources["device"] = resolve_param(
-            "device",
-            args.device,
-            config=config,
-            config_keys=["default_device"],
-            state_record=state_lookup,
-            state_keys=["device"],
-            required=True,
-        )
+        # device 从工程配置或 state 解析
+        device = dev_params["device"]
+        parameter_sources["device"] = dev_params["device_source"]
+        if is_missing(device):
+            raise ValueError("缺少必要参数: device")
+
         elf_file, parameter_sources["elf"] = resolve_param(
             "elf",
             args.elf,
@@ -255,22 +308,10 @@ def main() -> None:
             state_keys=["elf_file", "debug_file"],
             normalize_as_path=True,
         )
-        interface, parameter_sources["interface"] = resolve_param(
-            "interface",
-            args.interface,
-            config=config,
-            config_keys=["default_interface"],
-            state_record=state_lookup,
-            state_keys=["interface"],
-        )
-        speed, parameter_sources["speed"] = resolve_param(
-            "speed",
-            args.speed,
-            config=config,
-            config_keys=["default_speed"],
-            state_record=state_lookup,
-            state_keys=["speed"],
-        )
+        interface = dev_params["interface"]
+        parameter_sources["interface"] = dev_params["interface_source"]
+        speed = dev_params["speed"]
+        parameter_sources["speed"] = dev_params["speed_source"]
         serial_no, parameter_sources["serial_no"] = resolve_param(
             "serial_no",
             args.serial_no,
@@ -429,6 +470,12 @@ def main() -> None:
                 },
                 str(workspace),
             )
+            # 写回确认过的参数到工程配置
+            save_project_config(str(workspace), {
+                "device": device,
+                "interface": interface or "SWD",
+                "speed": speed or "4000",
+            })
             result = make_result(
                 status="ok",
                 action=args.command,

@@ -1,12 +1,4 @@
 {
   "tshark_exe": "tshark",
-  "capinfos_exe": "capinfos",
-  "default_interface": "",
-  "default_target": "",
-  "default_capture_filter": "",
-  "default_display_filter": "",
-  "default_duration": 30,
-  "default_timeout_ms": 1000,
-  "default_scan_ports": "",
-  "default_capture_format": "pcapng"
+  "capinfos_exe": "capinfos"
 }

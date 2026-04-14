@@ -10,6 +10,23 @@ import tempfile
 import time
 from pathlib import Path
 
+# 添加 runtime 模块路径
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from jlink_runtime import (
+    load_local_config,
+    load_project_config,
+    save_project_config,
+    load_workspace_state,
+    get_state_entry,
+    update_state_entry,
+    workspace_root,
+    normalize_path,
+    is_missing,
+)
+
 # J-Link Commander 命令模板
 TEMPLATES = {
     "info": "si {interface}\nspeed {speed}\nconnect\nsleep 200\nexit\n",
@@ -316,13 +333,70 @@ ALL_ACTIONS = [
 ]
 
 
+def resolve_device_params(args):
+    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > state.json"""
+    workspace = workspace_root(args.workspace)
+    local_config = load_local_config(__file__)
+    project_config = load_project_config(str(workspace))
+    state = load_workspace_state(str(workspace))
+
+    # 从 state 获取历史值
+    last_flash = get_state_entry(state, "last_flash")
+    last_debug = get_state_entry(state, "last_debug")
+
+    # device: CLI > 工程配置 > state > 报错
+    device = args.device
+    device_source = "cli"
+    if is_missing(device):
+        device = project_config.get("device")
+        device_source = "project_config"
+    if is_missing(device):
+        device = last_flash.get("device") or last_debug.get("device")
+        device_source = "state"
+
+    # interface: CLI > 工程配置 > state > 默认 SWD
+    interface = args.interface
+    interface_source = "cli"
+    if is_missing(interface):
+        interface = project_config.get("interface")
+        interface_source = "project_config"
+    if is_missing(interface):
+        interface = last_flash.get("interface") or last_debug.get("interface")
+        interface_source = "state"
+    if is_missing(interface):
+        interface = "SWD"
+        interface_source = "default"
+
+    # speed: CLI > 工程配置 > state > 默认 4000
+    speed = args.speed
+    speed_source = "cli"
+    if is_missing(speed):
+        speed = project_config.get("speed")
+        speed_source = "project_config"
+    if is_missing(speed):
+        speed = last_flash.get("speed") or last_debug.get("speed")
+        speed_source = "state"
+    if is_missing(speed):
+        speed = "4000"
+        speed_source = "default"
+
+    return {
+        "device": device,
+        "device_source": device_source,
+        "interface": interface,
+        "interface_source": interface_source,
+        "speed": speed,
+        "speed_source": speed_source,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="J-Link 设备探测/烧录/内存读写/寄存器/复位/在线调试")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default="", help="JLink.exe 路径")
-    parser.add_argument("--device", required=True, help="芯片型号（如 STM32F407VG）")
-    parser.add_argument("--interface", default="SWD", choices=["SWD", "JTAG"], help="调试接口")
-    parser.add_argument("--speed", default="4000", help="调试速率 kHz")
+    parser.add_argument("--device", default=None, help="芯片型号（如 STM32F407VG）")
+    parser.add_argument("--interface", default=None, help="调试接口")
+    parser.add_argument("--speed", default=None, help="调试速率 kHz")
     parser.add_argument("--serial-no", default="", help="探针序列号")
     parser.add_argument("--file", default="", help="固件文件路径（flash 用）")
     parser.add_argument("--address", default="", help="地址（flash .bin / read-mem / write-mem / bp-set 用）")
@@ -331,9 +405,26 @@ def main():
     parser.add_argument("--width", default="32", choices=["8", "16", "32"], help="数据宽度")
     parser.add_argument("--count", type=int, default=1, help="单步次数（step 用）")
     parser.add_argument("--timeout-ms", default="2000", help="run-to 等待断点命中的超时毫秒数")
+    parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args()
+
+    # 解析参数
+    params = resolve_device_params(args)
+    workspace = workspace_root(args.workspace)
+
+    # 检查 device 是否已提供
+    if is_missing(params["device"]):
+        result = {
+            "status": "error", "action": args.action,
+            "error": {"code": "missing_device", "message": "必须提供 --device 芯片型号，或通过 .embeddedskills/config.json 配置"},
+        }
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {result['error']['message']}", file=sys.stderr)
+        sys.exit(1)
 
     # 参数校验
     if args.action == "flash" and not args.file:
@@ -382,10 +473,10 @@ def main():
 
     result = run_jlink(
         exe=args.exe,
-        device=args.device,
+        device=params["device"],
         action=args.action,
-        interface=args.interface,
-        speed=args.speed,
+        interface=params["interface"],
+        speed=params["speed"],
         serial_no=args.serial_no,
         file=args.file,
         address=args.address,
@@ -396,7 +487,38 @@ def main():
         timeout_ms=args.timeout_ms,
     )
 
+    # 成功执行后，写回确认过的参数到工程配置
+    if result.get("status") == "ok":
+        save_project_config(str(workspace), {
+            "device": params["device"],
+            "interface": params["interface"],
+            "speed": params["speed"],
+        })
+        # 同时更新 state.json
+        if args.action in ("flash", "reset", "halt", "go", "step", "run-to", "info"):
+            state_action = "last_flash" if args.action == "flash" else "last_debug"
+            update_state_entry(
+                state_action,
+                {
+                    "provider": "jlink",
+                    "action": args.action,
+                    "device": params["device"],
+                    "interface": params["interface"],
+                    "speed": params["speed"],
+                    "serial_no": args.serial_no or "",
+                },
+                str(workspace),
+            )
+
     if args.as_json:
+        # 添加参数来源信息
+        if "details" not in result:
+            result["details"] = {}
+        result["details"]["parameter_sources"] = {
+            "device": params["device_source"],
+            "interface": params["interface_source"],
+            "speed": params["speed_source"],
+        }
         output_json(result)
     else:
         if result["status"] == "ok":

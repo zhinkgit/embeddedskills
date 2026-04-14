@@ -106,15 +106,28 @@ git clone https://github.com/luhao200/embeddedskills .claude/skills/embeddedskil
 
 ### Configuration
 
-Copy the `config.example.json` of the desired skill to `config.json` and fill in local paths and parameters:
+#### Environment-level Configuration (Required)
+
+Copy each skill's `config.example.json` to `config.json` and fill in local tool paths:
 
 ```bash
 cd ~/.claude/skills/embeddedskills/jlink
 cp config.example.json config.json
-# Edit config.json — set JLink.exe path, default chip model, etc.
+# Edit config.json — set JLink.exe path and other environment parameters
 ```
 
 > `config.json` is excluded by `.gitignore` and will not be committed.
+
+#### Project-level Configuration (Optional)
+
+Create `.embeddedskills/config.json` in the project root to store project defaults:
+
+```bash
+mkdir -p .embeddedskills
+# Create config.json and fill in project default parameters
+```
+
+> The `.embeddedskills/` directory is excluded by `.gitignore` and will not be committed.
 
 ### External Dependencies
 
@@ -158,9 +171,61 @@ All scripts return unified JSON:
 
 Full schema also includes `context`, `metrics`, `state`, `timing`. Streaming commands use JSON Lines.
 
-### Workspace State
+### Configuration Layers
 
-Runtime state is stored in `.embeddedskills/state.json` within the project directory, recording `last_build`, `last_flash`, `last_debug`, `last_observe`.
+This toolkit uses a three-layer configuration structure:
+
+| Layer | File Location | Purpose | Example Content |
+|-------|---------------|---------|-----------------|
+| **Environment-level** | `skill/config.json` | Tool paths, local hardware parameters | `uv4_exe` path, `jlink_exe` path |
+| **Project-level shared** | `workspace/.embeddedskills/config.json` | Project defaults grouped by skill | Target chip, interface, log directories |
+| **Runtime state** | `workspace/.embeddedskills/state.json` | Runtime state only | `last_build`, `last_flash`, `last_debug`, `last_observe` |
+
+#### Project-level Configuration Full Structure Example
+
+```json
+{
+  "workflow": {
+    "preferred_build": "auto",
+    "preferred_flash": "auto",
+    "preferred_debug": "auto",
+    "preferred_observe": "auto"
+  },
+  "keil": { "project": "", "target": "", "log_dir": ".embeddedskills/build" },
+  "gcc": { "project": "", "preset": "", "log_dir": ".embeddedskills/build" },
+  "jlink": { "device": "", "interface": "SWD", "speed": "4000" },
+  "openocd": { "board": "", "interface": "", "target": "", "adapter_speed": "", "transport": "", "tpiu_name": "", "traceclk": "", "pin_freq": "" },
+  "serial": { "port": "", "baudrate": 115200, "bytesize": 8, "parity": "none", "stopbits": 1, "encoding": "utf-8", "timeout_sec": 1.0, "log_dir": ".embeddedskills/logs/serial" },
+  "can": { "interface": "", "channel": "", "bitrate": 0, "data_bitrate": 0, "log_dir": ".embeddedskills/logs/can" },
+  "net": { "interface": "", "target": "", "capture_filter": "", "display_filter": "", "duration": 30, "timeout_ms": 1000, "scan_ports": "", "capture_format": "pcapng", "log_dir": ".embeddedskills/logs/net" }
+}
+```
+
+#### Unified Log Directories
+
+| Type | Directory |
+|------|-----------|
+| Build logs | `.embeddedskills/build` |
+| Serial logs | `.embeddedskills/logs/serial` |
+| CAN logs | `.embeddedskills/logs/can` |
+| Network logs | `.embeddedskills/logs/net` |
+
+#### Parameter Resolution Order
+
+1. CLI arguments
+2. `skill/config.json` (environment-level)
+3. `.embeddedskills/config.json` (project-level)
+4. `.embeddedskills/state.json` (runtime state)
+5. Local detection/search
+6. Prompt user
+
+#### Configuration Write-back Rules
+
+| Configuration Type | Write-back Location |
+|-------------------|---------------------|
+| Environment-level values | `skill/config.json` |
+| Project-level values | `.embeddedskills/config.json` |
+| Runtime state | `.embeddedskills/state.json` |
 
 ### Operation Modes
 

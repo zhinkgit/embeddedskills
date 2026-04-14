@@ -15,7 +15,9 @@ argument-hint: "[info|flash|read-mem|write-mem|regs|reset|halt|go|step|run-to|rt
 
 ## 配置
 
-skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `exe` 路径正确：
+### 环境级配置（skill/config.json）
+
+skill 目录下的 `config.json` 包含环境级配置（工具路径、端口号等），首次使用前确认 `exe` 路径正确：
 
 ```json
 {
@@ -23,10 +25,6 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
   "gdbserver_exe": "C:\\Program Files\\SEGGER\\JLink\\JLinkGDBServerCL.exe",
   "rtt_exe": "C:\\Program Files\\SEGGER\\JLink\\JLinkRTTClient.exe",
   "gdb_exe": "C:\\Program Files\\Arm\\GNU Toolchain mingw-w64-x86_64-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
-  "default_elf": "",
-  "default_device": "",
-  "default_interface": "SWD",
-  "default_speed": "4000",
   "serial_no": "",
   "rtt_telnet_port": 0,
   "swo_command": [],
@@ -38,14 +36,32 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 - `gdbserver_exe`：JLinkGDBServerCL.exe 路径，RTT 和 GDB 调试需要
 - `rtt_exe`：JLinkRTTClient.exe 路径
 - `gdb_exe`：arm-none-eabi-gdb 路径，GDB 源码级调试需要
-- `default_elf`：默认 ELF 路径；为空时优先读取 `.embeddedskills/state.json`
-- `default_device`：默认芯片型号（如 GD32F470ZG），为空时需用户指定
-- `default_interface`：调试接口，SWD 或 JTAG，默认 SWD
-- `default_speed`：调试速率 kHz，默认 4000
 - `serial_no`：默认探针序列号，多探针场景下使用
 - `rtt_telnet_port`：RTT 端口，0 表示使用工具默认值
 - `swo_command`：可选，完整 SWO viewer 命令数组，供 `jlink_swo.py` 包装
 - `operation_mode`：`1` 直接执行 / `2` 输出风险摘要但不阻塞 / `3` 执行前确认
+
+### 工程级配置（.embeddedskills/config.json）
+
+设备参数（device/interface/speed）统一在工作区的 `.embeddedskills/config.json` 中管理：
+
+```json
+{
+  "jlink": {
+    "device": "STM32F407VG",
+    "interface": "SWD",
+    "speed": "4000"
+  }
+}
+```
+
+- `device`：芯片型号（如 STM32F407VG、GD32F470ZG）
+- `interface`：调试接口，SWD 或 JTAG，默认 SWD
+- `speed`：调试速率 kHz，默认 4000
+
+参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+
+成功执行后，确认过的 device/interface/speed 会自动写回工程配置。
 
 ## 子命令
 
@@ -81,13 +97,16 @@ skill 目录下的 `config.json` 包含运行时配置，首次使用前确认 `
 
 ## 执行流程
 
-1. 读取 `config.json`，确认 `exe` 路径有效
-2. 读取默认 `device / interface / speed / serial_no`
-3. 若当前动作需要 `device` 且仍为空，直接要求用户补充，绝不猜测
-4. 多探针场景未指定 `serial_no` 时，列出探针让用户选择，不自动选择
-5. 按 `operation_mode` 决定是否需要确认后执行
-6. 使用模板生成临时 `.jlink` 命令文件，调用 JLink.exe 时带 `-NoGui 1 -ExitOnError 1 -AutoConnect 1`
-7. 解析输出和返回码，返回结构化结果
+1. 读取 `skill/config.json`，确认 `exe` 路径有效
+2. 读取 `.embeddedskills/config.json` 获取工程级配置（device/interface/speed）
+3. 读取 `.embeddedskills/state.json` 获取历史状态
+4. 参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+5. 若当前动作需要 `device` 且仍为空，直接要求用户补充，绝不猜测
+6. 多探针场景未指定 `serial_no` 时，列出探针让用户选择，不自动选择
+7. 按 `operation_mode` 决定是否需要确认后执行
+8. 使用模板生成临时 `.jlink` 命令文件，调用 JLink.exe 时带 `-NoGui 1 -ExitOnError 1 -AutoConnect 1`
+9. 解析输出和返回码，返回结构化结果
+10. 成功执行后，将确认过的 device/interface/speed 写回 `.embeddedskills/config.json`
 
 ## 脚本调用
 
@@ -230,12 +249,14 @@ run-to 示例（断点命中）：
 
 - 不自动猜测 `device` 芯片型号，缺失时必须询问用户
 - 多探针场景不自动选择探针，必须让用户指定序列号
-- 参数解析优先级为：CLI 显式参数 > `config.json` > `.embeddedskills/state.json` > 报错
+- 参数解析优先级为：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
 - `.bin` 文件必须显式提供烧录地址，缺失时报错
 - 连接失败时给出排查建议（检查连线、供电、接口类型、速度），不自动尝试更激进参数
 - 烧录、写内存、复位在参数完整且用户意图明确时直接执行
 - `run-to` 的断点在单次 JLink 会话内完成设置和清除，不存在跨会话 handle 问题
 - 结果回显中始终包含目标芯片、接口类型和执行动作
+- 产物路径（elf/file）不进入工程配置，仍只依赖 `state.json`
+- `last_flash`/`last_debug` 等运行状态继续写入 `state.json`
 
 ## 调试典型工作流
 

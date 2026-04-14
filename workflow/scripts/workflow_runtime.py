@@ -11,10 +11,83 @@ from typing import Any
 
 STATE_DIR_NAME = ".embeddedskills"
 STATE_FILE_NAME = "state.json"
+PROJECT_CONFIG_FILE_NAME = "config.json"
+SKILL_NAME = "workflow"
 
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def default_config_path(script_file: str) -> Path:
+    return Path(script_file).resolve().parents[1] / "config.json"
+
+
+def load_local_config(script_file: str | None = None) -> dict:
+    """加载 workflow/config.json（环境级配置）- workflow 基本为空或只有扩展位
+
+    路径：当前脚本所在 skill 目录下的 config.json
+    """
+    if script_file is None:
+        import inspect
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            script_file = frame.f_back.f_globals.get("__file__", "")
+        if not script_file:
+            return {}
+    config_path = default_config_path(script_file)
+    return load_json_file(config_path)
+
+
+def save_local_config(data: dict, script_file: str | None = None) -> Path | None:
+    """保存环境级配置到 workflow/config.json"""
+    if script_file is None:
+        import inspect
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            script_file = frame.f_back.f_globals.get("__file__", "")
+        if not script_file:
+            return None
+    config_path = default_config_path(script_file)
+    existing = load_json_file(config_path)
+    existing.update(data)
+    save_json_file(config_path, existing)
+    return config_path
+
+
+def load_project_config(workspace: str | None = None) -> dict:
+    """从 workspace/.embeddedskills/config.json 读取 workflow 的工程级配置
+
+    参数: workspace - 工作区路径，None 时使用 cwd
+    返回: config["workflow"] 部分
+    """
+    ws = workspace_root(workspace)
+    config_file = ws / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    data = load_json_file(config_file)
+    return data.get(SKILL_NAME, {})
+
+
+def save_project_config(workspace: str | None = None, values: dict | None = None) -> Path | None:
+    """写回 workflow 工程级配置到 .embeddedskills/config.json
+
+    - 只更新 workflow 部分，不覆盖其他 skill 的配置
+    - 目录不存在时自动创建 .embeddedskills/
+    """
+    if values is None:
+        values = {}
+    ws = workspace_root(workspace)
+    config_file = ws / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    data = load_json_file(config_file)
+    data[SKILL_NAME] = {**(data.get(SKILL_NAME, {})), **values}
+    save_json_file(config_file, data)
+    return config_file
+
+
+def load_full_project_config(workspace: str | None = None) -> dict:
+    """读取完整的 .embeddedskills/config.json（workflow 需要读取其他 skill 的配置）"""
+    ws = workspace_root(workspace)
+    config_file = ws / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
+    return load_json_file(config_file)
 
 
 def output_json(data: dict, *, indent: int = 2) -> None:
@@ -42,6 +115,12 @@ def load_json_file(path: str | Path) -> dict:
         return {}
 
 
+def save_json_file(path: str | Path, data: dict) -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def workspace_root(workspace: str | None = None) -> Path:
     if not is_missing(workspace):
         return Path(str(workspace)).expanduser().resolve()
@@ -50,6 +129,24 @@ def workspace_root(workspace: str | None = None) -> Path:
 
 def load_workspace_state(workspace: str | None = None) -> dict:
     return load_json_file(workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME)
+
+
+def save_workspace_state(state: dict, workspace: str | None = None) -> Path:
+    file_path = workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME
+    save_json_file(file_path, state)
+    return file_path
+
+
+def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
+    state = load_workspace_state(workspace)
+    state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
+    file_path = save_workspace_state(state, workspace)
+    return {
+        "workspace": str(workspace_root(workspace)),
+        "file": str(file_path),
+        "updated_keys": [category],
+        category: state[category],
+    }
 
 
 def get_state_entry(state: dict | None, key: str) -> dict:
