@@ -269,7 +269,7 @@ mkdir -p .embeddedskills
 | gcc | ✅ 已完成测试 |
 | jlink | ✅ 已完成测试 |
 | serial | ✅ 已完成测试 |
-| net | 🔧 待测试 |
+| net | ✅ 已完成测试 |
 | openocd | ✅ 已完成测试 |
 | workflow | ✅ 已完成测试 |
 | can | 🔧 待测试 |

@@ -269,7 +269,7 @@ Skills with execution risk can be controlled by `operation_mode` in `config.json
 | gcc | ✅ Tested |
 | jlink | ✅ Tested |
 | serial | ✅ Tested |
-| net | 🔧 Pending test |
+| net | ✅ Tested |
 | openocd | ✅ Tested |
 | workflow | ✅ Tested |
 | can | 🔧 Pending test |
