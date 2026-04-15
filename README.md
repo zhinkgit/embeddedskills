@@ -1,3 +1,5 @@
+<div align="center">
+
 简体中文 | [English](./README.en.md)
 
 # embeddedskills — 嵌入式开发调试 Skill 集
@@ -22,6 +24,8 @@
 适用于 Claude Code、Copilot、TRAE 及其他支持 Skill 协议的 AI 编码助手。
 
 如果觉得项目对你有帮助，求一个免费的🌟。
+
+</div>
 
 ## 动机
 
@@ -100,10 +104,10 @@ workflow                              用户 / AI 直接调用
 
 ```bash
 # 安装全部 skill（全局）
-npx skills add https://github.com/luhao200/embeddedskills -g -y
+npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 
 # 仅安装某个 skill
-npx skills add https://github.com/luhao200/embeddedskills --skill jlink -g -y
+npx skills add https://github.com/zhinkgit/embeddedskills --skill jlink -g -y
 
 # 管理
 npx skills ls -g        # 查看已安装
@@ -115,10 +119,10 @@ npx skills remove -g    # 移除
 
 ```bash
 # 全局生效
-git clone https://github.com/luhao200/embeddedskills ~/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills ~/.claude/skills/embeddedskills
 
 # 仅当前项目
-git clone https://github.com/luhao200/embeddedskills .claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskills
 ```
 
 ### 配置
@@ -274,6 +278,16 @@ mkdir -p .embeddedskills
 | workflow | ✅ 已完成测试 |
 | can | 🔧 待测试 |
 
-## License
+## Star History
 
-MIT — 详见 [LICENSE](LICENSE)。
+<a href="https://www.star-history.com/?repos=zhinkgit%2Fembeddedskills&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&legend=top-left" />
+ </picture>
+</a>
+
+欢迎提交 Issues 和 PR。
+
+感谢 [Linux.do](https://linux.do/) 社区支持。

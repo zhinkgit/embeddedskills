@@ -1,3 +1,5 @@
+<div align="center">
+
 [简体中文](./README.md) | English
 
 # embeddedskills — Embedded Development & Debugging Skills
@@ -22,6 +24,8 @@
 Compatible with Claude Code, Copilot, TRAE, and other AI coding assistants that support the Skill protocol.
 
 If you find the project helpful, please give it a free 🌟.
+
+</div>
 
 ## Motivation
 
@@ -100,10 +104,10 @@ workflow                              User / AI calls directly
 
 ```bash
 # Install all skills globally
-npx skills add https://github.com/luhao200/embeddedskills -g -y
+npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 
 # Install only one specific skill
-npx skills add https://github.com/luhao200/embeddedskills --skill jlink -g -y
+npx skills add https://github.com/zhinkgit/embeddedskills --skill jlink -g -y
 
 # Management
 npx skills ls -g        # List installed
@@ -115,10 +119,10 @@ npx skills remove -g    # Remove
 
 ```bash
 # Global
-git clone https://github.com/luhao200/embeddedskills ~/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills ~/.claude/skills/embeddedskills
 
 # Current project only
-git clone https://github.com/luhao200/embeddedskills .claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskills
 ```
 
 ### Configuration
@@ -274,6 +278,16 @@ Skills with execution risk can be controlled by `operation_mode` in `config.json
 | workflow | ✅ Tested |
 | can | 🔧 Pending test |
 
-## License
+## Star History
 
-MIT — see [LICENSE](LICENSE).
+<a href="https://www.star-history.com/?repos=zhinkgit%2Fembeddedskills&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=zhinkgit/embeddedskills&type=date&legend=top-left" />
+ </picture>
+</a>
+
+Welcome to submit Issues and PRs.
+
+Thanks to the [Linux.do](https://linux.do/) community for their support.
