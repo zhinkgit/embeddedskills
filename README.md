@@ -100,7 +100,7 @@ workflow                              用户 / AI 直接调用
 
 ## 安装
 
-### npx 安装（推荐）
+### 方法一：npx 安装（推荐）
 
 ```bash
 # 安装全部 skill（全局）
@@ -115,7 +115,7 @@ npx skills update -g    # 更新
 npx skills remove -g    # 移除
 ```
 
-### 克隆到本地
+### 方法二：克隆到本地
 
 ```bash
 # 全局生效
@@ -126,6 +126,8 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 ```
 
 ### 配置
+
+全局让AI自己配置，或者你也可以先行配置好环境参数，AI 就能开箱即用。
 
 #### 环境级配置（必需）
 

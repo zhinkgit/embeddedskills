@@ -100,7 +100,7 @@ workflow                              User / AI calls directly
 
 ## Installation
 
-### npx Install (Recommended)
+### Method 1: npx Install (Recommended)
 
 ```bash
 # Install all skills globally
@@ -115,7 +115,7 @@ npx skills update -g    # Update
 npx skills remove -g    # Remove
 ```
 
-### Clone Locally
+### Method 2: Clone Locally
 
 ```bash
 # Global
@@ -126,6 +126,8 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 ```
 
 ### Configuration
+
+Globally allow the AI to configure itself, or you can pre-configure the environment parameters, and the AI will be ready to use out of the box.
 
 #### Environment-level Configuration (Required)
 
