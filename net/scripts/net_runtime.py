@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -17,6 +18,11 @@ STATE_DIR_NAME = ".embeddedskills"
 STATE_FILE_NAME = "state.json"
 PROJECT_CONFIG_FILE = "config.json"
 
+WINDOWS_TOOL_DIRS = [
+    Path(r"C:\Program Files\Wireshark"),
+    Path(r"C:\Program Files (x86)\Wireshark"),
+]
+
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -24,6 +30,58 @@ def now_iso() -> str:
 
 def is_missing(value: Any) -> bool:
     return value is None or value == ""
+
+
+def decode_text(data: bytes | str | None) -> str:
+    """以稳健方式解码命令输出，兼容 Windows 下工具的混合编码。"""
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+
+    for encoding in ("utf-8", "gbk", "cp1252", sys.getdefaultencoding()):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def looks_like_ipv4(value: str) -> bool:
+    return bool(re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", value))
+
+
+def looks_like_ip(value: str) -> bool:
+    return looks_like_ipv4(value) or (":" in value and bool(re.fullmatch(r"[0-9a-fA-F:]+(?:%\d+)?", value)))
+
+
+def resolve_tool_path(configured: str | None, default_name: str) -> str:
+    """解析工具路径，优先使用配置，其次 PATH，最后尝试常见安装目录。"""
+    candidates: list[str] = []
+    if configured and configured.strip():
+        candidates.append(configured.strip())
+    candidates.append(default_name)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+
+        expanded = str(Path(candidate).expanduser())
+        if Path(expanded).exists():
+            return expanded
+
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    for base_dir in WINDOWS_TOOL_DIRS:
+        candidate_path = base_dir / default_name
+        if candidate_path.exists():
+            return str(candidate_path)
+
+    return configured.strip() if configured and configured.strip() else default_name
 
 
 def load_json_file(path: str | Path) -> dict:
@@ -192,8 +250,9 @@ def make_timing(start_time: float) -> dict:
 
 def check_tshark(exe: str = "tshark") -> bool:
     """检查 tshark 是否可用"""
+    resolved_exe = resolve_tool_path(exe, "tshark.exe" if sys.platform == "win32" else "tshark")
     try:
-        result = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run([resolved_exe, "--version"], capture_output=True, text=False, timeout=5)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -201,9 +260,10 @@ def check_tshark(exe: str = "tshark") -> bool:
 
 def parse_tshark_interfaces(tshark_exe: str = "tshark") -> list[dict] | None:
     """解析 tshark -D 获取抓包接口列表"""
+    resolved_exe = resolve_tool_path(tshark_exe, "tshark.exe" if sys.platform == "win32" else "tshark")
     try:
         result = subprocess.run(
-            [tshark_exe, "-D"], capture_output=True, text=True, timeout=10
+            [resolved_exe, "-D"], capture_output=True, text=False, timeout=10
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -212,7 +272,7 @@ def parse_tshark_interfaces(tshark_exe: str = "tshark") -> list[dict] | None:
         return None
 
     interfaces = []
-    for line in result.stdout.splitlines():
+    for line in decode_text(result.stdout).splitlines():
         line = line.strip()
         if not line:
             continue
@@ -238,6 +298,7 @@ def parse_ipconfig() -> list[dict]:
 
     interfaces = []
     current = None
+    current_label = ""
 
     for line in result.stdout.splitlines():
         # 适配器标题行
@@ -253,34 +314,76 @@ def parse_ipconfig() -> list[dict]:
                 "description": "",
                 "mac": "",
                 "ipv4": "",
+                "ipv4_list": [],
                 "subnet": "",
+                "subnet_list": [],
                 "gateway": "",
+                "gateway_list": [],
                 "dhcp": "",
                 "status": "up",
             }
+            current_label = ""
             continue
 
         if current is None:
             continue
 
         line_stripped = line.strip()
+        key, sep, value = line_stripped.partition(":")
+        if not sep:
+            key, sep, value = line_stripped.partition("：")
+        key = key.strip()
+        value = value.strip()
+        continuation_value = value if sep else line_stripped
 
         if re.match(r"(媒体状态|Media State)", line_stripped, re.IGNORECASE):
             if "断开" in line_stripped or "disconnected" in line_stripped.lower():
                 current["status"] = "down"
+            current_label = ""
         elif re.match(r"(描述|Description)", line_stripped, re.IGNORECASE):
-            current["description"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
+            current["description"] = value
+            current_label = ""
         elif re.match(r"(物理地址|Physical Address)", line_stripped, re.IGNORECASE):
-            current["mac"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
+            current["mac"] = value
+            current_label = ""
         elif re.match(r"(IPv4 地址|IPv4 Address)", line_stripped, re.IGNORECASE):
-            val = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-            current["ipv4"] = re.sub(r"\(.*?\)", "", val).strip()
+            ipv4 = re.sub(r"\(.*?\)", "", value).strip()
+            if looks_like_ipv4(ipv4):
+                current["ipv4_list"].append(ipv4)
+                current["ipv4"] = current["ipv4_list"][0]
+            current_label = "ipv4"
         elif re.match(r"(子网掩码|Subnet Mask)", line_stripped, re.IGNORECASE):
-            current["subnet"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
+            if looks_like_ipv4(value):
+                current["subnet_list"].append(value)
+                current["subnet"] = current["subnet_list"][0]
+            current_label = "subnet"
         elif re.match(r"(默认网关|Default Gateway)", line_stripped, re.IGNORECASE):
-            current["gateway"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-        elif re.match(r"DHCP", line_stripped, re.IGNORECASE) and "已启用" in line_stripped or "Yes" in line_stripped:
+            if looks_like_ip(value):
+                current["gateway_list"].append(value)
+                current["gateway"] = current["gateway_list"][0]
+            current_label = "gateway"
+        elif re.match(r"DHCP", line_stripped, re.IGNORECASE) and ("已启用" in line_stripped or "Yes" in line_stripped):
             current["dhcp"] = "enabled"
+            current_label = ""
+        elif current_label == "gateway" and line.startswith(" ") and looks_like_ip(continuation_value):
+            current["gateway_list"].append(continuation_value)
+        elif current_label == "ipv4" and line.startswith(" ") and looks_like_ipv4(continuation_value):
+            ipv4 = re.sub(r"\(.*?\)", "", continuation_value).strip()
+            if ipv4:
+                current["ipv4_list"].append(ipv4)
+        elif current_label == "subnet" and line.startswith(" ") and looks_like_ipv4(continuation_value):
+            current["subnet_list"].append(continuation_value)
+        elif current_label in {"ipv4", "subnet", "gateway"} and value == "" and key:
+            # 避免误判下一行标题
+            current_label = ""
+
+    for iface in interfaces + ([current] if current else []):
+        if iface["ipv4_list"] and not iface["ipv4"]:
+            iface["ipv4"] = iface["ipv4_list"][0]
+        if iface["subnet_list"] and not iface["subnet"]:
+            iface["subnet"] = iface["subnet_list"][0]
+        if iface["gateway_list"] and not iface["gateway"]:
+            iface["gateway"] = iface["gateway_list"][0]
 
     if current:
         interfaces.append(current)
@@ -380,8 +483,10 @@ def get_net_config(
     sources["log_dir"] = src or "default"
 
     # 获取工具路径（环境级配置）
-    tshark_exe = local_cfg.get("tshark_exe", "tshark")
-    capinfos_exe = local_cfg.get("capinfos_exe", "capinfos")
+    default_tshark = "tshark.exe" if sys.platform == "win32" else "tshark"
+    default_capinfos = "capinfos.exe" if sys.platform == "win32" else "capinfos"
+    tshark_exe = resolve_tool_path(local_cfg.get("tshark_exe"), default_tshark)
+    capinfos_exe = resolve_tool_path(local_cfg.get("capinfos_exe"), default_capinfos)
 
     config = {
         "interface": interface,

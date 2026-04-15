@@ -8,11 +8,13 @@ import os
 import subprocess
 import sys
 import signal
+import tempfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from net_runtime import (
+    decode_text,
     get_net_config,
     save_project_config,
     update_state_entry,
@@ -20,7 +22,7 @@ from net_runtime import (
 )
 
 
-def build_tshark_cmd(config, args):
+def build_tshark_cmd(config, args, *, output_path="", include_display_filter=True):
     exe = config["tshark_exe"]
     cmd = [exe]
 
@@ -36,7 +38,7 @@ def build_tshark_cmd(config, args):
 
     # 显示过滤器
     display_filter = config["display_filter"]
-    if display_filter:
+    if display_filter and include_display_filter:
         cmd += ["-Y", display_filter]
 
     # 持续时间
@@ -44,9 +46,9 @@ def build_tshark_cmd(config, args):
     cmd += ["-a", f"duration:{duration}"]
 
     # 输出文件
-    if args.output:
+    if output_path:
         fmt = args.format or config["capture_format"]
-        cmd += ["-w", args.output]
+        cmd += ["-w", output_path]
         if fmt == "pcap":
             cmd += ["-F", "pcap"]
 
@@ -116,28 +118,87 @@ def main():
         "display_filter": config["display_filter"],
     })
 
-    cmd, _ = build_tshark_cmd(config, args)
+    filter_after_capture = bool(args.output and config.get("display_filter"))
+    temp_output = ""
+    output_path = args.output
+    if filter_after_capture:
+        fd, temp_output = tempfile.mkstemp(
+            prefix="net_capture_",
+            suffix=".pcap" if (args.format or config["capture_format"]) == "pcap" else ".pcapng",
+        )
+        os.close(fd)
+        output_path = temp_output
+
+    cmd, _ = build_tshark_cmd(
+        config,
+        args,
+        output_path=output_path,
+        include_display_filter=not filter_after_capture,
+    )
     duration = config["duration"]
 
     print(f"[net capture] 接口={iface}, 时长={duration}s", file=sys.stderr)
-    if config.get("default_capture_filter"):
-        print(f"  抓包过滤器: {config['default_capture_filter']}", file=sys.stderr)
-    if config.get("default_display_filter"):
-        print(f"  显示过滤器: {config['default_display_filter']}", file=sys.stderr)
+    if config.get("capture_filter"):
+        print(f"  抓包过滤器: {config['capture_filter']}", file=sys.stderr)
+    if config.get("display_filter"):
+        print(f"  显示过滤器: {config['display_filter']}", file=sys.stderr)
     if args.output:
         print(f"  输出文件: {args.output}", file=sys.stderr)
+        if filter_after_capture:
+            print("  保存策略: 先原始抓包，再按显示过滤器离线筛选", file=sys.stderr)
     print(f"  命令: {' '.join(cmd)}", file=sys.stderr)
 
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False
         )
-        # 实时输出 stdout
-        for line in proc.stdout:
-            print(line, end="")
-        proc.wait()
+        stdout_data, stderr_data = proc.communicate()
+        stdout_text = decode_text(stdout_data)
+        stderr_output = decode_text(stderr_data)
 
-        stderr_output = proc.stderr.read()
+        if stdout_text:
+            print(stdout_text, end="")
+
+        if proc.returncode != 0:
+            error = {
+                "status": "error",
+                "action": "capture",
+                "error": {
+                    "code": "capture_failed",
+                    "message": stderr_output.strip() or f"tshark 退出码 {proc.returncode}",
+                },
+            }
+            print(json.dumps(error, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
+        if filter_after_capture:
+            filter_cmd = [exe, "-r", temp_output, "-Y", config["display_filter"], "-w", args.output]
+            if (args.format or config["capture_format"]) == "pcap":
+                filter_cmd += ["-F", "pcap"]
+            if args.decode_as:
+                filter_cmd += ["-d", args.decode_as]
+
+            filtered = subprocess.run(
+                filter_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+            )
+            filtered_stderr = decode_text(filtered.stderr)
+            if filtered.returncode != 0:
+                error = {
+                    "status": "error",
+                    "action": "capture",
+                    "error": {
+                        "code": "capture_filter_failed",
+                        "message": filtered_stderr.strip() or f"过滤失败，退出码 {filtered.returncode}",
+                    },
+                }
+                print(json.dumps(error, ensure_ascii=False, indent=2))
+                sys.exit(1)
+            if filtered_stderr.strip():
+                print(filtered_stderr, file=sys.stderr)
+
         if stderr_output.strip():
             print(stderr_output, file=sys.stderr)
 
@@ -169,6 +230,9 @@ def main():
         }
         print(json.dumps(error, ensure_ascii=False, indent=2))
         sys.exit(1)
+    finally:
+        if temp_output and os.path.exists(temp_output):
+            os.remove(temp_output)
 
 
 if __name__ == "__main__":

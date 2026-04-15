@@ -97,7 +97,8 @@ def traceroute(target, timeout_ms=1000):
             rest = m.group(2).strip()
             hops.append({"hop": hop_num, "detail": rest})
 
-    return {"target": target, "hops": hops}
+    reachable = any(target in hop["detail"] for hop in hops)
+    return {"target": target, "hops": hops, "reachable": reachable}
 
 
 def main():

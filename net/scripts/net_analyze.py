@@ -8,24 +8,22 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+from net_runtime import decode_text, load_local_config, resolve_tool_path
+
 
 def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return load_local_config()
 
 
 def run_cmd(cmd, timeout=30):
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, errors="replace")
-        return result.stdout, result.stderr, result.returncode
+        result = subprocess.run(cmd, capture_output=True, text=False, timeout=timeout)
+        return decode_text(result.stdout), decode_text(result.stderr), result.returncode
     except FileNotFoundError:
         return "", f"命令未找到: {cmd[0]}", -1
     except subprocess.TimeoutExpired:
@@ -142,7 +140,7 @@ def get_endpoints(tshark_exe, pcap_file, display_filter="", decode_as="", top=20
         if not line or line.startswith("="):
             header_found = True
             continue
-        if not header_found or "Address" in line:
+        if not header_found or "Address" in line or line.startswith("|"):
             continue
         parts = re.split(r"\s+", line)
         if len(parts) >= 3:
@@ -234,8 +232,34 @@ def main():
         sys.exit(1)
 
     config = load_config()
-    tshark_exe = config.get("tshark_exe", "tshark")
-    capinfos_exe = config.get("capinfos_exe", "capinfos")
+    tshark_exe = resolve_tool_path(
+        config.get("tshark_exe"),
+        "tshark.exe" if sys.platform == "win32" else "tshark",
+    )
+    capinfos_exe = resolve_tool_path(
+        config.get("capinfos_exe"),
+        "capinfos.exe" if sys.platform == "win32" else "capinfos",
+    )
+
+    filtered_input = ""
+    analysis_input = args.pcap_file
+
+    if args.filter:
+        fd, filtered_input = tempfile.mkstemp(prefix="net_analyze_filtered_", suffix=os.path.splitext(args.pcap_file)[1] or ".pcapng")
+        os.close(fd)
+        filter_cmd = [tshark_exe, "-r", args.pcap_file, "-Y", args.filter, "-w", filtered_input]
+        if args.decode_as:
+            filter_cmd += ["-d", args.decode_as]
+        stdout, stderr, rc = run_cmd(filter_cmd, timeout=120)
+        if rc != 0:
+            error = {
+                "status": "error",
+                "action": "analyze",
+                "error": {"code": "filter_failed", "message": stderr.strip() or "过滤失败"},
+            }
+            print(json.dumps(error, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        analysis_input = filtered_input
 
     result = {
         "status": "ok",
@@ -250,49 +274,47 @@ def main():
 
     for mode in modes:
         if mode == "summary":
-            info = get_capinfos_summary(capinfos_exe, args.pcap_file)
+            info = get_capinfos_summary(capinfos_exe, analysis_input)
             if info:
                 result["details"]["summary"] = info
                 result["summary"] = f"文件包含 {info.get('packet_count', '?')} 个数据包"
             else:
                 # 回退用 tshark 统计
-                stdout, _, rc = run_cmd([tshark_exe, "-r", args.pcap_file, "-q", "-z", "io,stat,0"])
+                stdout, _, rc = run_cmd([tshark_exe, "-r", analysis_input, "-q", "-z", "io,stat,0"])
                 result["details"]["summary"] = {"raw": stdout}
 
         elif mode == "protocols":
             result["details"]["protocols"] = get_protocol_hierarchy(
-                tshark_exe, args.pcap_file, args.filter, args.decode_as
+                tshark_exe, analysis_input, "", args.decode_as
             )
 
         elif mode == "conversations":
             result["details"]["conversations"] = get_conversations(
-                tshark_exe, args.pcap_file, args.filter, args.decode_as, args.top
+                tshark_exe, analysis_input, "", args.decode_as, args.top
             )
 
         elif mode == "endpoints":
             result["details"]["endpoints"] = get_endpoints(
-                tshark_exe, args.pcap_file, args.filter, args.decode_as, args.top
+                tshark_exe, analysis_input, "", args.decode_as, args.top
             )
 
         elif mode == "io":
             result["details"]["io_stats"] = get_io_stats(
-                tshark_exe, args.pcap_file, args.filter, args.decode_as
+                tshark_exe, analysis_input, "", args.decode_as
             )
 
         elif mode == "anomalies":
             result["details"]["anomalies"] = detect_anomalies(
-                tshark_exe, args.pcap_file, args.filter, args.decode_as
+                tshark_exe, analysis_input, "", args.decode_as
             )
 
     # 导出字段
     if args.export_fields and args.output:
         fields = [f.strip() for f in args.export_fields.split(",")]
-        cmd = [tshark_exe, "-r", args.pcap_file, "-T", "fields"]
+        cmd = [tshark_exe, "-r", analysis_input, "-T", "fields"]
         for f in fields:
             cmd += ["-e", f]
         cmd += ["-E", "header=y", "-E", "separator=,"]
-        if args.filter:
-            cmd += ["-Y", args.filter]
         if args.decode_as:
             cmd += ["-d", args.decode_as]
 
@@ -302,31 +324,35 @@ def main():
                 f.write(stdout)
             result["details"]["exported"] = {"file": args.output, "fields": fields}
 
-    if args.output_json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(f"[net analyze] {result.get('summary', '分析完成')}")
-        details = result["details"]
-        if "summary" in details and isinstance(details["summary"], dict):
-            for k, v in details["summary"].items():
-                if k != "raw":
-                    print(f"  {k}: {v}")
-        if "protocols" in details:
-            print("\n  协议统计:")
-            for p in details["protocols"][:args.top]:
-                print(f"    {p['protocol']}: {p['frames']} frames, {p['bytes']} bytes")
-        if "anomalies" in details and details["anomalies"]:
-            print("\n  异常检测:")
-            for a in details["anomalies"]:
-                print(f"    {a['type']}: {a['count']} 次")
-        if "conversations" in details:
-            print("\n  会话:")
-            for c in details["conversations"][:5]:
-                print(f"    {c['addr_a']} <-> {c['addr_b']}")
-        if "endpoints" in details:
-            print("\n  端点:")
-            for e in details["endpoints"][:5]:
-                print(f"    {e['address']}")
+    try:
+        if args.output_json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"[net analyze] {result.get('summary', '分析完成')}")
+            details = result["details"]
+            if "summary" in details and isinstance(details["summary"], dict):
+                for k, v in details["summary"].items():
+                    if k != "raw":
+                        print(f"  {k}: {v}")
+            if "protocols" in details:
+                print("\n  协议统计:")
+                for p in details["protocols"][:args.top]:
+                    print(f"    {p['protocol']}: {p['frames']} frames, {p['bytes']} bytes")
+            if "anomalies" in details and details["anomalies"]:
+                print("\n  异常检测:")
+                for a in details["anomalies"]:
+                    print(f"    {a['type']}: {a['count']} 次")
+            if "conversations" in details:
+                print("\n  会话:")
+                for c in details["conversations"][:5]:
+                    print(f"    {c['addr_a']} <-> {c['addr_b']}")
+            if "endpoints" in details:
+                print("\n  端点:")
+                for e in details["endpoints"][:5]:
+                    print(f"    {e['address']}")
+    finally:
+        if filtered_input and os.path.exists(filtered_input):
+            os.remove(filtered_input)
 
 
 if __name__ == "__main__":

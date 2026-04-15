@@ -8,11 +8,13 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from net_runtime import (
+    decode_text,
     get_net_config,
     save_project_config,
     update_state_entry,
@@ -20,37 +22,65 @@ from net_runtime import (
 )
 
 
-def check_tshark(exe):
-    try:
-        result = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
 def run_tshark_stats(exe, iface, duration, mode, interval, display_filter=""):
-    """运行 tshark 统计并解析结果。"""
-    cmd = [exe, "-i", str(iface), "-a", f"duration:{duration}", "-q"]
+    """先抓包到临时文件，再离线统计，确保显示过滤器可靠生效。"""
+    fd, capture_file = tempfile.mkstemp(prefix="net_stats_", suffix=".pcapng")
+    os.close(fd)
+    filtered_file = ""
 
-    if display_filter:
-        cmd += ["-Y", display_filter]
-
-    if mode == "protocol":
-        cmd += ["-z", "io,phs"]
-    elif mode == "endpoint":
-        cmd += ["-z", "endpoints,ip"]
-    elif mode == "port":
-        cmd += ["-z", "endpoints,tcp"]
-    else:  # overview
-        cmd += ["-z", f"io,stat,{interval}"]
+    capture_cmd = [exe, "-i", str(iface), "-a", f"duration:{duration}", "-w", capture_file]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 30)
-        return result.stdout, result.stderr, result.returncode
+        capture = subprocess.run(
+            capture_cmd,
+            capture_output=True,
+            text=False,
+            timeout=duration + 30,
+        )
+        if capture.returncode != 0:
+            return "", decode_text(capture.stderr), capture.returncode
+
+        analyze_source = capture_file
+        if display_filter:
+            fd, filtered_file = tempfile.mkstemp(prefix="net_stats_filtered_", suffix=".pcapng")
+            os.close(fd)
+            filter_cmd = [exe, "-r", capture_file, "-Y", display_filter, "-w", filtered_file]
+            filtered = subprocess.run(
+                filter_cmd,
+                capture_output=True,
+                text=False,
+                timeout=60,
+            )
+            if filtered.returncode != 0:
+                return "", decode_text(filtered.stderr), filtered.returncode
+            analyze_source = filtered_file
+
+        analyze_cmd = [exe, "-r", analyze_source, "-q"]
+        if mode == "protocol":
+            analyze_cmd += ["-z", "io,phs"]
+        elif mode == "endpoint":
+            analyze_cmd += ["-z", "endpoints,ip"]
+        elif mode == "port":
+            analyze_cmd += ["-z", "endpoints,tcp"]
+        else:  # overview
+            analyze_cmd += ["-z", f"io,stat,{interval}"]
+
+        result = subprocess.run(
+            analyze_cmd,
+            capture_output=True,
+            text=False,
+            timeout=60,
+        )
+        return decode_text(result.stdout), decode_text(result.stderr), result.returncode
     except subprocess.TimeoutExpired:
         return "", "统计超时", -1
     except FileNotFoundError:
         return "", "tshark 未找到", -2
+    finally:
+        if os.path.exists(capture_file):
+            os.remove(capture_file)
+        if filtered_file and os.path.exists(filtered_file):
+            os.remove(filtered_file)
 
 
 def parse_io_stat(stdout):
@@ -92,7 +122,7 @@ def parse_endpoints(stdout):
         if line.startswith("=") or "Filter:" in line:
             started = True
             continue
-        if not started or not line or "Address" in line:
+        if not started or not line or "Address" in line or line.startswith("|"):
             continue
         parts = re.split(r"\s+", line)
         if len(parts) >= 3:

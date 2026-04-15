@@ -4,102 +4,13 @@
 import argparse
 import io
 import json
-import re
-import subprocess
 import sys
 
 # 确保 stdout 使用 UTF-8 编码
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-
-def parse_ipconfig():
-    """解析 ipconfig /all 获取网络接口信息。"""
-    try:
-        result = subprocess.run(
-            ["ipconfig", "/all"], capture_output=True, text=True, encoding="gbk", errors="replace"
-        )
-    except FileNotFoundError:
-        return []
-
-    interfaces = []
-    current = None
-
-    for line in result.stdout.splitlines():
-        # 适配器标题行
-        adapter_match = re.match(r"^(\S.*?)\s*适配器\s+(.+?)\s*[:：]", line)
-        if not adapter_match:
-            adapter_match = re.match(r"^(\S.*?)\s+adapter\s+(.+?)\s*[:：]", line, re.IGNORECASE)
-        if adapter_match:
-            if current:
-                interfaces.append(current)
-            current = {
-                "type": adapter_match.group(1).strip(),
-                "name": adapter_match.group(2).strip(),
-                "description": "",
-                "mac": "",
-                "ipv4": "",
-                "subnet": "",
-                "gateway": "",
-                "dhcp": "",
-                "status": "up",
-            }
-            continue
-
-        if current is None:
-            continue
-
-        line_stripped = line.strip()
-
-        if re.match(r"(媒体状态|Media State)", line_stripped, re.IGNORECASE):
-            if "断开" in line_stripped or "disconnected" in line_stripped.lower():
-                current["status"] = "down"
-        elif re.match(r"(描述|Description)", line_stripped, re.IGNORECASE):
-            current["description"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-        elif re.match(r"(物理地址|Physical Address)", line_stripped, re.IGNORECASE):
-            current["mac"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-        elif re.match(r"(IPv4 地址|IPv4 Address)", line_stripped, re.IGNORECASE):
-            val = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-            current["ipv4"] = re.sub(r"\(.*?\)", "", val).strip()
-        elif re.match(r"(子网掩码|Subnet Mask)", line_stripped, re.IGNORECASE):
-            current["subnet"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-        elif re.match(r"(默认网关|Default Gateway)", line_stripped, re.IGNORECASE):
-            current["gateway"] = line_stripped.split(":", 1)[-1].strip() if ":" in line_stripped else ""
-        elif re.match(r"DHCP", line_stripped, re.IGNORECASE) and "已启用" in line_stripped or "Yes" in line_stripped:
-            current["dhcp"] = "enabled"
-
-    if current:
-        interfaces.append(current)
-
-    return interfaces
-
-
-def parse_tshark_interfaces(tshark_exe="tshark"):
-    """解析 tshark -D 获取抓包接口列表。"""
-    try:
-        result = subprocess.run(
-            [tshark_exe, "-D"], capture_output=True, text=True, timeout=10
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-
-    if result.returncode != 0:
-        return None
-
-    interfaces = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # 格式: 1. \Device\NPF_{...} (描述)
-        m = re.match(r"(\d+)\.\s+(.+?)(?:\s+\((.+?)\))?\s*$", line)
-        if m:
-            interfaces.append({
-                "index": int(m.group(1)),
-                "device": m.group(2).strip(),
-                "description": m.group(3).strip() if m.group(3) else "",
-            })
-    return interfaces
+from net_runtime import parse_ipconfig, parse_tshark_interfaces
 
 
 def main():
@@ -120,6 +31,7 @@ def main():
             or kw in iface["description"].lower()
             or kw in iface["type"].lower()
             or kw in iface.get("ipv4", "").lower()
+            or any(kw in ip.lower() for ip in iface.get("ipv4_list", []))
         ]
 
     result = {
@@ -148,12 +60,19 @@ def main():
             print(f"  {status_icon} {iface['name']} ({iface['type']})")
             if iface["description"]:
                 print(f"    描述: {iface['description']}")
-            if iface["ipv4"]:
-                print(f"    IPv4: {iface['ipv4']}/{iface['subnet']}")
+            ipv4_list = iface.get("ipv4_list") or ([iface["ipv4"]] if iface["ipv4"] else [])
+            subnet_list = iface.get("subnet_list") or ([iface["subnet"]] if iface["subnet"] else [])
+            if ipv4_list:
+                paired = []
+                for index, ip in enumerate(ipv4_list):
+                    subnet = subnet_list[index] if index < len(subnet_list) else iface.get("subnet", "")
+                    paired.append(f"{ip}/{subnet}" if subnet else ip)
+                print(f"    IPv4: {', '.join(paired)}")
             if iface["mac"]:
                 print(f"    MAC:  {iface['mac']}")
-            if iface["gateway"]:
-                print(f"    网关: {iface['gateway']}")
+            gateway_list = iface.get("gateway_list") or ([iface["gateway"]] if iface["gateway"] else [])
+            if gateway_list:
+                print(f"    网关: {', '.join(gateway_list)}")
         if args.tshark and result["details"].get("tshark_interfaces"):
             print("\n[tshark 抓包接口]")
             for ti in result["details"]["tshark_interfaces"]:
