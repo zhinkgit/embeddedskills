@@ -127,30 +127,7 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 
 ### 配置
 
-全局让AI自己配置，或者你也可以先行配置好环境参数，AI 就能开箱即用。
-
-#### 环境级配置（必需）
-
-将各 skill 的 `config.example.json` 复制为 `config.json`，填入本地工具路径：
-
-```bash
-cd ~/.claude/skills/embeddedskills/jlink
-cp config.example.json config.json
-# 编辑 config.json，填写 JLink.exe 路径等环境参数
-```
-
-> `config.json` 已被 `.gitignore` 排除，不会提交到仓库。
-
-#### 工程级配置（可选）
-
-在项目根目录创建 `.embeddedskills/config.json` 保存工程默认配置：
-
-```bash
-mkdir -p .embeddedskills
-# 创建 config.json 并填写工程默认参数
-```
-
-> `.embeddedskills/` 目录已被 `.gitignore` 排除，不会提交到仓库。
+和AI对话让AI自己配置，或者你也可以先行配置好环境参数，AI 就能开箱即用。
 
 ### 外部依赖
 
@@ -204,27 +181,7 @@ mkdir -p .embeddedskills
 | **工程级共享配置** | `workspace/.embeddedskills/config.json` | 按 skill 分组的工程默认配置 | 目标芯片、接口、日志目录等 |
 | **运行状态** | `workspace/.embeddedskills/state.json` | 仅保存运行状态 | `last_build`、`last_flash`、`last_debug`、`last_observe` |
 
-#### 工程级配置完整结构示例
-
-```json
-{
-  "workflow": {
-    "preferred_build": "auto",
-    "preferred_flash": "auto",
-    "preferred_debug": "auto",
-    "preferred_observe": "auto"
-  },
-  "keil": { "project": "", "target": "", "log_dir": ".embeddedskills/build" },
-  "gcc": { "project": "", "preset": "", "log_dir": ".embeddedskills/build" },
-  "jlink": { "device": "", "interface": "SWD", "speed": "4000" },
-  "openocd": { "board": "", "interface": "", "target": "", "adapter_speed": "", "transport": "", "tpiu_name": "", "traceclk": "", "pin_freq": "" },
-  "serial": { "port": "", "baudrate": 115200, "bytesize": 8, "parity": "none", "stopbits": 1, "encoding": "utf-8", "timeout_sec": 1.0, "log_dir": ".embeddedskills/logs/serial" },
-  "can": { "interface": "", "channel": "", "bitrate": 0, "data_bitrate": 0, "log_dir": ".embeddedskills/logs/can" },
-  "net": { "interface": "", "target": "", "capture_filter": "", "display_filter": "", "duration": 30, "timeout_ms": 1000, "scan_ports": "", "capture_format": "pcapng", "log_dir": ".embeddedskills/logs/net" }
-}
-```
-
-#### 统一日志目录
+### 统一日志目录
 
 | 类型 | 目录 |
 |------|------|
@@ -232,33 +189,6 @@ mkdir -p .embeddedskills
 | 串口日志 | `.embeddedskills/logs/serial` |
 | CAN 日志 | `.embeddedskills/logs/can` |
 | 网络日志 | `.embeddedskills/logs/net` |
-
-#### 参数解析顺序
-
-1. CLI 参数
-2. `skill/config.json`（环境级）
-3. `.embeddedskills/config.json`（工程级）
-4. `.embeddedskills/state.json`（运行状态）
-5. 本地探测/搜索
-6. 询问用户
-
-#### 配置写回规则
-
-| 配置类型 | 写回位置 |
-|----------|----------|
-| 环境级值 | `skill/config.json` |
-| 工程级值 | `.embeddedskills/config.json` |
-| 运行状态 | `.embeddedskills/state.json` |
-
-### 执行模式
-
-带执行风险的 skill 可通过 `config.json` 中的 `operation_mode` 控制（当前主要是 `keil`、`gcc`、`jlink`、`openocd`）：
-
-| 模式 | 说明 |
-|------|------|
-| 1 | 立即执行 |
-| 2 | 显示风险摘要，不阻断 |
-| 3 | 执行前要求确认 |
 
 ### 设计原则
 
@@ -290,6 +220,6 @@ mkdir -p .embeddedskills
  </picture>
 </a>
 
-欢迎提交 Issues 和 PR。
+欢迎提 Issue 和 PR。
 
 感谢 [Linux.do](https://linux.do/) 社区支持。
