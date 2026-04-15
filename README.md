@@ -125,11 +125,11 @@ git clone https://github.com/zhinkgit/embeddedskills ~/.claude/skills/embeddedsk
 git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskills
 ```
 
-### 配置
+## 使用手册
 
-和AI对话让AI自己配置，或者你也可以先行配置好环境参数，AI 就能开箱即用。
+[使用手册](docs/getting-started.md) ：包含一个使用用例。
 
-### 外部依赖
+## 外部依赖
 
 | Skill | 依赖 |
 |-------|------|
