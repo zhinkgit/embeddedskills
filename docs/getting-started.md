@@ -42,8 +42,6 @@ npx skills update -g    # 更新到最新版本
 npx skills remove -g    # 移除
 ```
 
-![npx skills 管理命令](Zassets/局部截取_20260415_220829.png)
-
 ---
 
 ### 方式二：手动 clone

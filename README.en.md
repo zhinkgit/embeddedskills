@@ -2,9 +2,9 @@
 
 [简体中文](./README.md) | English
 
-# ⚡ embeddedskills
+# embeddedskills — Embedded Development & Debugging Skills
 
-### Give AI direct control over your compilers, debuggers, and communication buses
+### Give AI coding assistants direct control over compilers, debuggers, and communication buses — completing the last mile of embedded development automation.
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/status-active-success?style=flat-square)]()

@@ -2,9 +2,9 @@
 
 简体中文 | [English](./README.en.md)
 
-# ⚡ embeddedskills
+# embeddedskills — 嵌入式开发调试 Skill 集
 
-### 让 AI 直接操控你的编译器、调试器和通信总线
+### 让 AI 编码助手直接操控编译器、调试器和通信总线，补上嵌入式开发自动化的最后一环。
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/status-active-success?style=flat-square)]()

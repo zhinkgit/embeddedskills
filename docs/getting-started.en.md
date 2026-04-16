@@ -13,7 +13,7 @@
     - [Method 2: Manual Clone](#method-2-manual-clone)
   - [2. Verify Installation](#2-verify-installation)
   - [3. Configure Environment Parameters](#3-configure-environment-parameters)
-  - [4. Hardware Connection & Toolchain Verification](#4-hardware-connection--toolchain-verification)
+  - [4. Hardware Connection \& Toolchain Verification](#4-hardware-connection--toolchain-verification)
   - [5. Let AI Take Over](#5-let-ai-take-over)
   - [6. Complete Closed-Loop Workflow](#6-complete-closed-loop-workflow)
 
@@ -41,8 +41,6 @@ npx skills ls -g        # List installed
 npx skills update -g    # Update to latest version
 npx skills remove -g    # Remove
 ```
-
-![npx skills management commands](Zassets/局部截取_20260415_220829.png)
 
 ---
 
