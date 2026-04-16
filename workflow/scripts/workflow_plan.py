@@ -86,9 +86,9 @@ def main() -> None:
         details={
             "workspace": str(workspace),
             "build_candidates": build_candidates,
-            "flash_candidates": ["jlink", "openocd"],
-            "debug_candidates": ["jlink", "openocd"],
-            "observe_candidates": ["jlink:rtt", "openocd:semihosting", "jlink:swo", "openocd:itm"],
+            "flash_candidates": ["jlink", "openocd", "probe-rs"],
+            "debug_candidates": ["jlink", "openocd", "probe-rs"],
+            "observe_candidates": ["jlink:rtt", "openocd:semihosting", "jlink:swo", "openocd:itm", "probe-rs:rtt"],
             "preferred": preferred,
         },
         context=parameter_context(provider="workflow", workspace=str(workspace), config_path=config_path),

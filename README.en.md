@@ -42,7 +42,7 @@ flowchart TD
     B --> C["🔨 Auto Compile keil build / gcc build"]
     C -->|Errors| D["🤖 AI Reads Compiler Errors"]
     D --> B
-    C -->|Success| E["⚡ Auto Flash openocd flash / jlink flash"]
+    C -->|Success| E["⚡ Auto Flash openocd flash / jlink flash / probe-rs flash"]
     E --> F["🔬 Auto Debug & Verify"]
     F -->|Anomaly| G["🤖 AI Reads Debug Info"]
     G --> B
@@ -65,7 +65,7 @@ flowchart TD
 |:---:|:---:|:---:|
 | Code Writing | ✅ AI | ✅ AI |
 | Compile/Build | 🙋 You | 🤖 AI invokes Keil / GCC |
-| Flash/Download | 🙋 You | 🤖 AI invokes J-Link / OpenOCD |
+| Flash/Download | 🙋 You | 🤖 AI invokes J-Link / OpenOCD / probe-rs |
 | Debug/Verify | 🙋 You | 🤖 AI breakpoints / registers / memory |
 | Communication Debug | 🙋 You | 🤖 AI serial / CAN / network |
 | Error Fixing | 🙋 You copy errors to AI | 🤖 AI reads and fixes autonomously |
@@ -93,6 +93,7 @@ flowchart TD
 
     D --- jlink["jlink"]
     D --- openocd["openocd"]
+    D --- probe_rs["probe-rs"]
 
     style W fill:#4CAF50,color:#fff,rx:8
     style B fill:#2196F3,color:#fff,rx:8
@@ -109,13 +110,14 @@ flowchart TD
 | 🔨 Build | **gcc** | CMake-based GCC project configuration, compile, size analysis | `scan` `presets` `configure` `build` `rebuild` `size` |
 | 🔬 Debug | **jlink** | Flash, read/write memory/registers, RTT/SWO, GDB debug | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 Debug | **openocd** | Flash, erase, GDB/Telnet, Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
+| 🔬 Debug | **probe-rs** | Probe discovery, flashing, reset, memory access, GDB debug, RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
 | 🔌 Communication | **serial** | Scan serial ports, real-time monitor, send data, hex view | `scan` `monitor` `send` `hex` `log` |
 | 🔌 Communication | **can** | CAN/CAN-FD monitoring, send frames, DBC decode, statistics | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 Communication | **net** | Packet capture analysis, connectivity test, port scan, traffic stats | `capture` `analyze` `ping` `scan` `stats` |
 | 🎯 Orchestration | **workflow** | Auto-detect project → Select toolchain → Orchestrate full flow | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
 
 > [!TIP]
-> `Keil / GCC` and `J-Link / OpenOCD` can be freely combined orthogonally — all four combinations work out of the box.
+> `Keil / GCC` and `J-Link / OpenOCD / probe-rs` can be freely combined orthogonally — all six combinations work out of the box.
 
 ---
 
@@ -161,7 +163,7 @@ Three key designs enable true autonomous AI closed-loop:
 <details>
 <summary><b>① Wrap CLI Tools</b></summary>
 
-Each Skill is a set of Python scripts that convert underlying tools (UV4.exe, cmake, JLink.exe, openocd, tshark, etc.) CLI parameters and interactive flows into structured subcommands, allowing AI to call these tools like functions.
+Each Skill is a set of Python scripts that convert underlying tools (UV4.exe, cmake, JLink.exe, openocd, probe-rs, tshark, etc.) CLI parameters and interactive flows into structured subcommands, allowing AI to call these tools like functions.
 
 </details>
 
@@ -226,11 +228,15 @@ workspace/
 | gcc | CMake · Ninja/Make · ARM GNU Toolchain |
 | jlink | SEGGER J-Link Software · arm-none-eabi-gdb |
 | openocd | OpenOCD · Debugger drivers (ST-Link / CMSIS-DAP / DAPLink / FTDI) |
+| probe-rs | probe-rs CLI · arm-none-eabi-gdb |
 | serial | pyserial · USB-to-serial driver |
 | can | python-can · cantools · pyserial · USB-CAN driver |
 | net | Wireshark (tshark) · Npcap |
 
 > Except for CAN and serial, all Skills are implemented using Python standard library — no additional Python dependencies needed.
+
+> [!WARNING]
+> On Windows, using `probe-rs` with `J-Link` typically requires switching the probe driver to `WinUSB`, which can break the official SEGGER tooling. If you still rely on the SEGGER toolchain, prefer the existing `jlink` skill.
 
 </details>
 
@@ -244,6 +250,7 @@ workspace/
 | gcc | ✅ Tested |
 | jlink | ✅ Tested |
 | openocd | ✅ Tested |
+| probe-rs | 🔧 Pending |
 | serial | ✅ Tested |
 | net | ✅ Tested |
 | workflow | ✅ Tested |

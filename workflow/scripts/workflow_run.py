@@ -82,6 +82,38 @@ def _single_or_error(items: list[str], label: str) -> tuple[str | None, dict | N
     return None, {"code": "not_found", "message": f"未发现可用的{label}", "candidates": []}
 
 
+def _is_openocd_ready(full_config: dict) -> bool:
+    openocd_cfg = full_config.get("openocd", {})
+    return bool(openocd_cfg.get("board") or (openocd_cfg.get("interface") and openocd_cfg.get("target")))
+
+
+def _is_jlink_ready(full_config: dict) -> bool:
+    return bool((full_config.get("jlink") or {}).get("device"))
+
+
+def _is_probe_rs_ready(full_config: dict) -> bool:
+    return bool((full_config.get("probe-rs") or {}).get("chip"))
+
+
+def _select_backend(explicit: str | None, preferred: str | None, ready_backends: list[str], action: str) -> tuple[str | None, dict | None]:
+    backend = explicit or preferred or "auto"
+    if backend != "auto":
+        return backend, None
+    if len(ready_backends) == 1:
+        return ready_backends[0], None
+    if len(ready_backends) > 1:
+        return None, {
+            "code": "multiple_backend_candidates",
+            "message": f"{action} 存在多个可用后端，请通过 CLI 或 workflow.preferred_* 显式指定",
+            "candidates": ready_backends,
+        }
+    return None, {
+        "code": "no_backend_available",
+        "message": f"未找到可用的 {action} 后端，请补充 jlink/openocd/probe-rs 配置",
+        "candidates": [],
+    }
+
+
 def run_json(cmd: list[str], workdir: Path) -> dict:
     proc = subprocess.run(
         cmd,
@@ -175,14 +207,22 @@ def build_project(workspace: Path, full_config: dict, discovery: dict, backend: 
 
 def flash_project(workspace: Path, full_config: dict, state: dict, explicit: str | None) -> dict:
     workflow_config = full_config.get("workflow", {})
-    backend = explicit or workflow_config.get("preferred_flash") or "auto"
+    selected, error = _select_backend(
+        explicit,
+        workflow_config.get("preferred_flash"),
+        [name for name, ready in (("openocd", _is_openocd_ready(full_config)), ("jlink", _is_jlink_ready(full_config)), ("probe-rs", _is_probe_rs_ready(full_config))) if ready],
+        "flash",
+    )
+    if error:
+        return {"status": "error", "action": "flash", "error": error}
+
     last_build = get_state_entry(state, "last_build")
     artifacts = last_build.get("artifacts", {})
     flash_file = last_build.get("flash_file") or artifacts.get("flash_file")
     if not flash_file:
         return {"status": "error", "action": "flash", "error": {"code": "missing_last_build", "message": "未找到 last_build.flash_file，请先执行 workflow build"}}
 
-    if backend in ("auto", "openocd"):
+    if selected == "openocd":
         openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
@@ -202,36 +242,70 @@ def flash_project(workspace: Path, full_config: dict, state: dict, explicit: str
             cmd.extend(["--target", openocd_cfg["target"]])
         return _with_backend(run_json(cmd, workspace), "openocd")
 
-    jlink_cfg = full_config.get("jlink", {})
-    if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "flash", "error": {"code": "missing_device", "message": "使用 jlink flash 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+    if selected == "jlink":
+        jlink_cfg = full_config.get("jlink", {})
+        if not jlink_cfg.get("device"):
+            return {"status": "error", "action": "flash", "error": {"code": "missing_device", "message": "使用 jlink flash 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+        cmd = [
+            PYTHON_EXE,
+            str(ROOT_DIR / "jlink" / "scripts" / "jlink_exec.py"),
+            "flash",
+            "--file",
+            flash_file,
+            "--device",
+            jlink_cfg["device"],
+            "--json",
+        ]
+        if jlink_cfg.get("interface"):
+            cmd.extend(["--interface", jlink_cfg["interface"]])
+        if jlink_cfg.get("speed"):
+            cmd.extend(["--speed", str(jlink_cfg["speed"])])
+        return _with_backend(run_json(cmd, workspace), "jlink")
+
+    probe_rs_cfg = full_config.get("probe-rs", {})
+    if not probe_rs_cfg.get("chip"):
+        return {"status": "error", "action": "flash", "error": {"code": "missing_chip", "message": "使用 probe-rs flash 时需要在 .embeddedskills/config.json 的 probe-rs 段提供 chip"}}
     cmd = [
         PYTHON_EXE,
-        str(ROOT_DIR / "jlink" / "scripts" / "jlink_exec.py"),
+        str(ROOT_DIR / "probe-rs" / "scripts" / "probe_rs_exec.py"),
         "flash",
+        "--workspace",
+        str(workspace),
         "--file",
         flash_file,
-        "--device",
-        jlink_cfg["device"],
+        "--chip",
+        probe_rs_cfg["chip"],
         "--json",
     ]
-    if jlink_cfg.get("interface"):
-        cmd.extend(["--interface", jlink_cfg["interface"]])
-    if jlink_cfg.get("speed"):
-        cmd.extend(["--speed", str(jlink_cfg["speed"])])
-    return _with_backend(run_json(cmd, workspace), "jlink")
+    if probe_rs_cfg.get("protocol"):
+        cmd.extend(["--protocol", probe_rs_cfg["protocol"]])
+    if probe_rs_cfg.get("probe"):
+        cmd.extend(["--probe", probe_rs_cfg["probe"]])
+    if probe_rs_cfg.get("speed"):
+        cmd.extend(["--speed", str(probe_rs_cfg["speed"])])
+    if probe_rs_cfg.get("connect_under_reset"):
+        cmd.append("--connect-under-reset")
+    return _with_backend(run_json(cmd, workspace), "probe-rs")
 
 
 def debug_project(workspace: Path, full_config: dict, state: dict, explicit: str | None) -> dict:
     workflow_config = full_config.get("workflow", {})
-    backend = explicit or workflow_config.get("preferred_debug") or "auto"
+    selected, error = _select_backend(
+        explicit,
+        workflow_config.get("preferred_debug"),
+        [name for name, ready in (("openocd", _is_openocd_ready(full_config)), ("jlink", _is_jlink_ready(full_config)), ("probe-rs", _is_probe_rs_ready(full_config))) if ready],
+        "debug",
+    )
+    if error:
+        return {"status": "error", "action": "build-debug", "error": error}
+
     last_build = get_state_entry(state, "last_build")
     artifacts = last_build.get("artifacts", {})
     debug_file = last_build.get("debug_file") or artifacts.get("debug_file")
     if not debug_file:
         return {"status": "error", "action": "build-debug", "error": {"code": "missing_last_build", "message": "未找到 last_build.debug_file，请先执行 workflow build"}}
 
-    if backend in ("auto", "openocd"):
+    if selected == "openocd":
         openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
@@ -253,32 +327,66 @@ def debug_project(workspace: Path, full_config: dict, state: dict, explicit: str
             cmd.extend(["--gdb-exe", openocd_cfg["gdb_exe"]])
         return _with_backend(run_json(cmd, workspace), "openocd")
 
-    jlink_cfg = full_config.get("jlink", {})
-    if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "build-debug", "error": {"code": "missing_device", "message": "使用 jlink gdb 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+    if selected == "jlink":
+        jlink_cfg = full_config.get("jlink", {})
+        if not jlink_cfg.get("device"):
+            return {"status": "error", "action": "build-debug", "error": {"code": "missing_device", "message": "使用 jlink gdb 时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+        cmd = [
+            PYTHON_EXE,
+            str(ROOT_DIR / "jlink" / "scripts" / "jlink_gdb.py"),
+            "crash-report",
+            "--workspace",
+            str(workspace),
+            "--elf",
+            debug_file,
+            "--device",
+            jlink_cfg["device"],
+            "--json",
+        ]
+        if jlink_cfg.get("interface"):
+            cmd.extend(["--interface", jlink_cfg["interface"]])
+        if jlink_cfg.get("speed"):
+            cmd.extend(["--speed", str(jlink_cfg["speed"])])
+        return _with_backend(run_json(cmd, workspace), "jlink")
+
+    probe_rs_cfg = full_config.get("probe-rs", {})
+    if not probe_rs_cfg.get("chip"):
+        return {"status": "error", "action": "build-debug", "error": {"code": "missing_chip", "message": "使用 probe-rs gdb 时需要在 .embeddedskills/config.json 的 probe-rs 段提供 chip"}}
     cmd = [
         PYTHON_EXE,
-        str(ROOT_DIR / "jlink" / "scripts" / "jlink_gdb.py"),
+        str(ROOT_DIR / "probe-rs" / "scripts" / "probe_rs_gdb.py"),
         "crash-report",
         "--workspace",
         str(workspace),
         "--elf",
         debug_file,
-        "--device",
-        jlink_cfg["device"],
+        "--chip",
+        probe_rs_cfg["chip"],
         "--json",
     ]
-    if jlink_cfg.get("interface"):
-        cmd.extend(["--interface", jlink_cfg["interface"]])
-    if jlink_cfg.get("speed"):
-        cmd.extend(["--speed", str(jlink_cfg["speed"])])
-    return _with_backend(run_json(cmd, workspace), "jlink")
+    if probe_rs_cfg.get("protocol"):
+        cmd.extend(["--protocol", probe_rs_cfg["protocol"]])
+    if probe_rs_cfg.get("probe"):
+        cmd.extend(["--probe", probe_rs_cfg["probe"]])
+    if probe_rs_cfg.get("speed"):
+        cmd.extend(["--speed", str(probe_rs_cfg["speed"])])
+    if probe_rs_cfg.get("connect_under_reset"):
+        cmd.append("--connect-under-reset")
+    return _with_backend(run_json(cmd, workspace), "probe-rs")
 
 
 def observe_project(workspace: Path, full_config: dict, explicit: str | None) -> dict:
     workflow_config = full_config.get("workflow", {})
-    backend = explicit or workflow_config.get("preferred_observe") or "auto"
-    if backend in ("auto", "openocd"):
+    selected, error = _select_backend(
+        explicit,
+        workflow_config.get("preferred_observe"),
+        [name for name, ready in (("openocd", _is_openocd_ready(full_config)), ("jlink", _is_jlink_ready(full_config)), ("probe-rs", _is_probe_rs_ready(full_config))) if ready],
+        "observe",
+    )
+    if error:
+        return {"status": "error", "action": "observe", "error": error}
+
+    if selected == "openocd":
         openocd_cfg = full_config.get("openocd", {})
         cmd = [
             PYTHON_EXE,
@@ -295,19 +403,42 @@ def observe_project(workspace: Path, full_config: dict, explicit: str | None) ->
             cmd.extend(["--target", openocd_cfg["target"]])
         return {"status": "ok", "action": "observe", "summary": "已生成 openocd semihosting 观察命令", "details": {"command": cmd, "backend": "openocd"}}
 
-    jlink_cfg = full_config.get("jlink", {})
-    if not jlink_cfg.get("device"):
-        return {"status": "error", "action": "observe", "error": {"code": "missing_device", "message": "使用 jlink 观测时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+    if selected == "jlink":
+        jlink_cfg = full_config.get("jlink", {})
+        if not jlink_cfg.get("device"):
+            return {"status": "error", "action": "observe", "error": {"code": "missing_device", "message": "使用 jlink 观测时需要在 .embeddedskills/config.json 的 jlink 段提供 device"}}
+        cmd = [
+            PYTHON_EXE,
+            str(ROOT_DIR / "jlink" / "scripts" / "jlink_rtt.py"),
+            "--workspace",
+            str(workspace),
+            "--device",
+            jlink_cfg["device"],
+            "--json",
+        ]
+        return {"status": "ok", "action": "observe", "summary": "已生成 jlink RTT 观察命令", "details": {"command": cmd, "backend": "jlink"}}
+
+    probe_rs_cfg = full_config.get("probe-rs", {})
+    if not probe_rs_cfg.get("chip"):
+        return {"status": "error", "action": "observe", "error": {"code": "missing_chip", "message": "使用 probe-rs 观测时需要在 .embeddedskills/config.json 的 probe-rs 段提供 chip"}}
     cmd = [
         PYTHON_EXE,
-        str(ROOT_DIR / "jlink" / "scripts" / "jlink_rtt.py"),
+        str(ROOT_DIR / "probe-rs" / "scripts" / "probe_rs_rtt.py"),
         "--workspace",
         str(workspace),
-        "--device",
-        jlink_cfg["device"],
+        "--chip",
+        probe_rs_cfg["chip"],
         "--json",
     ]
-    return {"status": "ok", "action": "observe", "summary": "已生成 jlink RTT 观察命令", "details": {"command": cmd, "backend": "jlink"}}
+    if probe_rs_cfg.get("protocol"):
+        cmd.extend(["--protocol", probe_rs_cfg["protocol"]])
+    if probe_rs_cfg.get("probe"):
+        cmd.extend(["--probe", probe_rs_cfg["probe"]])
+    if probe_rs_cfg.get("speed"):
+        cmd.extend(["--speed", str(probe_rs_cfg["speed"])])
+    if probe_rs_cfg.get("connect_under_reset"):
+        cmd.append("--connect-under-reset")
+    return {"status": "ok", "action": "observe", "summary": "已生成 probe-rs RTT 观察命令", "details": {"command": cmd, "backend": "probe-rs"}}
 
 
 def diagnose(workspace: Path, full_config: dict, discovery: dict, state: dict) -> dict:
@@ -343,9 +474,9 @@ def main() -> None:
     parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--config", default=None, help="workflow config.json 路径（已废弃，仅保留兼容性）")
     parser.add_argument("--build-backend", choices=["auto", "keil", "gcc"], default=None)
-    parser.add_argument("--flash-backend", choices=["auto", "jlink", "openocd"], default=None)
-    parser.add_argument("--debug-backend", choices=["auto", "jlink", "openocd"], default=None)
-    parser.add_argument("--observe-backend", choices=["auto", "jlink", "openocd"], default=None)
+    parser.add_argument("--flash-backend", choices=["auto", "jlink", "openocd", "probe-rs"], default=None)
+    parser.add_argument("--debug-backend", choices=["auto", "jlink", "openocd", "probe-rs"], default=None)
+    parser.add_argument("--observe-backend", choices=["auto", "jlink", "openocd", "probe-rs"], default=None)
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
@@ -444,7 +575,7 @@ def main() -> None:
     wrapped = make_result(
         status=result.get("status", "error"),
         action=args.action,
-        summary=result.get("summary", "workflow 执行完成"),
+        summary=result.get("summary") or (result.get("error") or {}).get("message") or "workflow 执行完成",
         details=result.get("details", {}),
         context=parameter_context(provider="workflow", workspace=str(workspace), config_path=config_path),
         error=result.get("error"),

@@ -42,7 +42,7 @@ flowchart TD
     B --> C["🔨 自动编译 keil build / gcc build"]
     C -->|有错误| D["🤖 AI 读取编译错误"]
     D --> B
-    C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash"]
+    C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash / probe-rs flash"]
     E --> F["🔬 自动调试验证"]
     F -->|异常| G["🤖 AI 读取调试信息"]
     G --> B
@@ -65,7 +65,7 @@ flowchart TD
 |:---:|:---:|:---:|
 | 代码编写 | ✅ AI | ✅ AI |
 | 编译构建 | 🙋 你 | 🤖 AI 调用 Keil / GCC |
-| 烧录下载 | 🙋 你 | 🤖 AI 调用 J-Link / OpenOCD |
+| 烧录下载 | 🙋 你 | 🤖 AI 调用 J-Link / OpenOCD / probe-rs |
 | 调试验证 | 🙋 你 | 🤖 AI 断点 / 寄存器 / 内存 |
 | 通信调试 | 🙋 你 | 🤖 AI 串口 / CAN / 网络 |
 | 错误修正 | 🙋 你复制报错给 AI | 🤖 AI 自主读取并修正 |
@@ -93,6 +93,7 @@ flowchart TD
 
     D --- jlink["jlink"]
     D --- openocd["openocd"]
+    D --- probe_rs["probe-rs"]
 
     style W fill:#4CAF50,color:#fff,rx:8
     style B fill:#2196F3,color:#fff,rx:8
@@ -109,13 +110,14 @@ flowchart TD
 | 🔨 构建 | **gcc** | CMake 型 GCC 工程配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `size` |
 | 🔬 调试 | **jlink** | 烧录、读写内存/寄存器、RTT/SWO、GDB 调试 | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 调试 | **openocd** | 烧录、擦除、GDB/Telnet、Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
+| 🔬 调试 | **probe-rs** | 探针发现、烧录、复位、内存读写、GDB 调试、RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
 | 🔌 通信 | **serial** | 扫描串口、实时监控、发送数据、Hex 查看 | `scan` `monitor` `send` `hex` `log` |
 | 🔌 通信 | **can** | CAN/CAN-FD 监控、发帧、DBC 解码、统计 | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 通信 | **net** | 抓包分析、连通性测试、端口扫描、流量统计 | `capture` `analyze` `ping` `scan` `stats` |
 | 🎯 编排 | **workflow** | 自动识别工程 → 选择工具链 → 串联全流程 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
 
 > [!TIP]
-> `Keil / GCC` 与 `J-Link / OpenOCD` 可自由正交组合，四种搭配均可开箱即用。
+> `Keil / GCC` 与 `J-Link / OpenOCD / probe-rs` 可自由正交组合，六种搭配均可开箱即用。
 
 ---
 
@@ -158,7 +160,7 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 <details>
 <summary><b>① 封装命令行工具</b></summary>
 
-每个 Skill 是一组 Python 脚本，将底层工具（UV4.exe、cmake、JLink.exe、openocd、tshark 等）的命令行参数和交互流程转化为结构化子命令，AI 可以像调用函数一样调用这些工具。
+每个 Skill 是一组 Python 脚本，将底层工具（UV4.exe、cmake、JLink.exe、openocd、probe-rs、tshark 等）的命令行参数和交互流程转化为结构化子命令，AI 可以像调用函数一样调用这些工具。
 
 </details>
 
@@ -223,11 +225,15 @@ workspace/
 | gcc | CMake · Ninja/Make · ARM GNU Toolchain |
 | jlink | SEGGER J-Link Software · arm-none-eabi-gdb |
 | openocd | OpenOCD · 调试器驱动 (ST-Link / CMSIS-DAP / DAPLink / FTDI) |
+| probe-rs | probe-rs CLI · arm-none-eabi-gdb |
 | serial | pyserial · USB 转串口驱动 |
 | can | python-can · cantools · pyserial · USB-CAN 驱动 |
 | net | Wireshark (tshark) · Npcap |
 
 > 除 CAN 和串口外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
+
+> [!WARNING]
+> Windows 下若要让 `probe-rs` 驱动 `J-Link`，通常需要把驱动切到 `WinUSB`，这会影响 SEGGER 官方工具继续使用。若你仍依赖 J-Link 官方工具链，优先继续使用现有 `jlink` skill。
 
 </details>
 
@@ -241,6 +247,7 @@ workspace/
 | gcc | ✅ 已完成测试 |
 | jlink | ✅ 已完成测试 |
 | openocd | ✅ 已完成测试 |
+| probe-rs | 🔧 待测试 |
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |
 | workflow | ✅ 已完成测试 |

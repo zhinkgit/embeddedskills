@@ -7,7 +7,7 @@
 - 串联 `.embeddedskills/state.json`
 - 聚合底层脚本输出
 
-当前 `observe` 阶段会返回 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm` 这几类候选观测后端。
+当前 `observe` 阶段会返回 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm`、`probe-rs:rtt` 这几类候选观测后端。
 
 它不会重写底层构建器、烧录器或 GDB 解析逻辑。
 
@@ -42,7 +42,8 @@ workflow 不再维护独立的工程配置结构，所有工程参数统一从 `
   "keil": { "project": "...", "target": "..." },
   "gcc": { "project": "...", "preset": "..." },
   "jlink": { "device": "...", "interface": "SWD" },
-  "openocd": { "board": "...", "interface": "..." }
+  "openocd": { "board": "...", "interface": "..." },
+  "probe-rs": { "chip": "...", "protocol": "swd" }
 }
 ```
 

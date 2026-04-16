@@ -12,7 +12,7 @@ argument-hint: "[plan|build|build-flash|build-debug|observe|diagnose] ..."
 
 本 skill 不重复实现底层逻辑，只做发现、选择、串联和聚合。
 
-`observe` 阶段当前会给出 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm` 这几类候选后端。
+`observe` 阶段当前会给出 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm`、`probe-rs:rtt` 这几类候选后端。
 
 ## 命令
 
@@ -45,7 +45,7 @@ workflow 不再维护独立的工程配置结构，所有工程参数统一从 `
 }
 ```
 
-workflow 通过读取 `.embeddedskills/config.json` 中其他 skill 的配置段来获取工程参数（如 `keil.project`、`jlink.device` 等）。
+workflow 通过读取 `.embeddedskills/config.json` 中其他 skill 的配置段来获取工程参数（如 `keil.project`、`jlink.device`、`probe-rs.chip` 等）。
 
 ### 参数解析顺序
 

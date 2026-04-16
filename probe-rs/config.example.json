@@ -1,0 +1,7 @@
+{
+  "exe": "probe-rs",
+  "gdb_exe": "C:\\Program Files\\Arm\\GNU Toolchain mingw-w64-x86_64-arm-none-eabi\\bin\\arm-none-eabi-gdb.exe",
+  "gdb_port": 3333,
+  "dap_port": 50000,
+  "operation_mode": 1
+}
