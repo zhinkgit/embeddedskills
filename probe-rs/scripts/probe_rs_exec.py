@@ -67,17 +67,18 @@ def parse_output(text: str, action: str) -> dict:
             return {"error_code": code, "error_message": message, "raw": text}
 
     if action == "list":
-        probes = [line.strip() for line in text.splitlines() if line.strip()]
+        probes = []
+        for line in text.splitlines():
+            item = line.strip()
+            if not item or item.lower().startswith("the following debug probes were found"):
+                continue
+            probes.append(item)
         if probes:
             parsed["probes"] = probes
     elif action == "read-mem":
-        memory = []
-        for line in text.splitlines():
-            match = re.match(r"^(0x[0-9a-fA-F]+)\s*:\s*(.+)$", line.strip())
-            if match:
-                memory.append({"address": match.group(1), "data": match.group(2).strip()})
-        if memory:
-            parsed["memory"] = memory
+        words = re.findall(r"\b[0-9a-fA-F]{2,16}\b", text)
+        if words:
+            parsed["words"] = words
     elif action == "info":
         chip_match = re.search(r"chip[:=]\s*([^\r\n]+)", text, re.IGNORECASE)
         probe_match = re.search(r"probe[:=]\s*([^\r\n]+)", text, re.IGNORECASE)
@@ -97,11 +98,29 @@ def _summary(action: str, parsed: dict, fallback: str) -> str:
         return "擦除成功"
     if action == "reset":
         return "目标已复位"
-    if action == "read-mem" and parsed.get("memory"):
-        return f"已读取 {len(parsed['memory'])} 行内存数据"
+    if action == "read-mem" and parsed.get("words"):
+        return f"已读取 {len(parsed['words'])} 个内存字"
     if action == "write-mem":
         return "内存写入成功"
     return fallback
+
+
+def normalize_write_values(value_text: str) -> list[str]:
+    values = [item.strip() for item in re.split(r"[\s,]+", value_text) if item.strip()]
+    if not values:
+        raise ValueError("write-mem 必须提供 --value")
+
+    normalized: list[str] = []
+    for value in values:
+        lowered = value.lower()
+        if lowered.startswith(("0x", "0o", "0b")):
+            normalized.append(value)
+            continue
+        if re.fullmatch(r"[0-9a-fA-F]+", value) and (value.startswith("0") or re.search(r"[a-fA-F]", value)):
+            normalized.append(f"0x{value}")
+            continue
+        normalized.append(value)
+    return normalized
 
 
 def _state_lookup(state: dict) -> dict:
@@ -245,7 +264,7 @@ def build_command(action: str, params: dict, args) -> list[str]:
     if action == "read-mem":
         return [exe, "read", *build_probe_args(params), args.width, args.address, args.length]
     if action == "write-mem":
-        return [exe, "write", *build_probe_args(params), args.width, args.address, args.value]
+        return [exe, "write", *build_probe_args(params), args.width, args.address, *normalize_write_values(args.value)]
     if action == "flash":
         if is_missing(params["file"]):
             raise ValueError("flash 必须提供 --file 固件文件路径")

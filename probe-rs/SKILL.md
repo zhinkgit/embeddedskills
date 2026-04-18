@@ -12,6 +12,8 @@ argument-hint: "[list|info|flash|erase|reset|read-mem|write-mem|attach|run|gdb|r
 
 本 skill 提供 `probe-rs` CLI 的结构化包装，覆盖探针发现、目标信息、烧录、复位、内存读写、one-shot GDB 调试和 RTT 日志读取。
 
+Windows 下优先使用 `py -3` 调用脚本；若 `arm-none-eabi-gdb` 已在 `PATH` 中，`gdb` 子命令可自动发现，不强依赖 skill `config.json`。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -75,22 +77,22 @@ argument-hint: "[list|info|flash|erase|reset|read-mem|write-mem|attach|run|gdb|r
 
 ```bash
 # 列出探针
-python <skill-dir>/scripts/probe_rs_exec.py list --json
+py -3 <skill-dir>/scripts/probe_rs_exec.py list --json
 
 # 烧录 ELF
-python <skill-dir>/scripts/probe_rs_exec.py flash --chip STM32F407VGTx --file build/app.elf --json
+py -3 <skill-dir>/scripts/probe_rs_exec.py flash --chip STM32F407VGTx --file build/app.elf --json
 
 # 烧录 BIN（必须提供地址）
-python <skill-dir>/scripts/probe_rs_exec.py flash --chip STM32F407VGTx --file build/app.bin --address 0x08000000 --json
+py -3 <skill-dir>/scripts/probe_rs_exec.py flash --chip STM32F407VGTx --file build/app.bin --address 0x08000000 --json
 
 # 读取内存
-python <skill-dir>/scripts/probe_rs_exec.py read-mem --chip STM32F407VGTx --address 0x20000000 --length 16 --width b32 --json
+py -3 <skill-dir>/scripts/probe_rs_exec.py read-mem --chip STM32F407VGTx --address 0x20000000 --length 16 --width b32 --json
 
 # one-shot backtrace
-python <skill-dir>/scripts/probe_rs_gdb.py backtrace --chip STM32F407VGTx --elf build/app.elf --json
+py -3 <skill-dir>/scripts/probe_rs_gdb.py backtrace --chip STM32F407VGTx --elf build/app.elf --json
 
 # RTT
-python <skill-dir>/scripts/probe_rs_rtt.py --chip STM32F407VGTx --json
+py -3 <skill-dir>/scripts/probe_rs_rtt.py --chip STM32F407VGTx --json
 ```
 
 ## 核心规则

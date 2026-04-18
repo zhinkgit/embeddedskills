@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from shutil import which
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -67,7 +68,19 @@ def start_gdb_server(exe: str, chip: str, protocol: str, speed: str, probe: str,
     if not gdb_port:
         gdb_port = find_free_port()
 
-    cmd = [exe, "gdb", "--non-interactive", "--chip", chip, "--protocol", protocol, "--speed", speed, "--port", str(gdb_port)]
+    cmd = [
+        exe,
+        "gdb",
+        "--non-interactive",
+        "--chip",
+        chip,
+        "--protocol",
+        protocol,
+        "--speed",
+        speed,
+        "--gdb-connection-string",
+        f"localhost:{gdb_port}",
+    ]
     if probe:
         cmd.extend(["--probe", probe])
     if connect_under_reset:
@@ -87,29 +100,16 @@ def start_gdb_server(exe: str, chip: str, protocol: str, speed: str, probe: str,
 
 def wait_gdb_server_ready(proc: subprocess.Popen, port: int, timeout: int = 15) -> tuple[bool, str]:
     started = time.time()
-    captured: list[str] = []
-    ready_keywords = [f"port {port}", "gdb server", "listening"]
+    startup_grace = min(5.0, max(1.0, timeout / 3))
     while time.time() - started < timeout:
         if proc.poll() is not None:
             stdout = proc.stdout.read() if proc.stdout else ""
             stderr = proc.stderr.read() if proc.stderr else ""
-            captured.extend([stdout, stderr])
-            return False, "\n".join(part for part in captured if part).strip()
-        line = ""
-        if proc.stdout:
-            line = proc.stdout.readline()
-        if not line and proc.stderr:
-            line = proc.stderr.readline()
-        if not line:
-            time.sleep(0.1)
-            continue
-        captured.append(line.strip())
-        lowered = line.lower()
-        if any(keyword in lowered for keyword in ready_keywords):
-            return True, "\n".join(captured)
-        if ("error" in lowered or "failed" in lowered) and "waiting for connection" not in lowered:
-            return False, "\n".join(captured)
-    return False, "\n".join(captured)
+            return False, "\n".join(part for part in (stdout, stderr) if part).strip()
+        if time.time() - started >= startup_grace:
+            return True, f"probe-rs gdb 已启动，假定 localhost:{port} 可用"
+        time.sleep(0.2)
+    return False, f"GDB Server 在 {timeout}s 内未监听 localhost:{port}"
 
 
 def cleanup(procs: list[subprocess.Popen]) -> None:
@@ -147,7 +147,13 @@ def resolve_probe_params(args, config: dict, project_config: dict, state_lookup:
     parameter_sources["exe"] = "cli" if not is_missing(args.exe) else ("config:exe" if config.get("exe") else "default")
 
     gdb_exe = args.gdb_exe if not is_missing(args.gdb_exe) else config.get("gdb_exe")
-    parameter_sources["gdb_exe"] = "cli" if not is_missing(args.gdb_exe) else ("config:gdb_exe" if config.get("gdb_exe") else "")
+    gdb_source = "cli" if not is_missing(args.gdb_exe) else ("config:gdb_exe" if config.get("gdb_exe") else "")
+    if is_missing(gdb_exe):
+        discovered = which("arm-none-eabi-gdb") or which("arm-none-eabi-gdb.exe")
+        if discovered:
+            gdb_exe = discovered
+            gdb_source = "path"
+    parameter_sources["gdb_exe"] = gdb_source
 
     chip = args.chip
     chip_source = "cli"
@@ -268,6 +274,14 @@ def _metrics(parsed: dict) -> dict:
     return metrics
 
 
+def stepping_fallback_commands(action: str) -> list[str] | None:
+    if action == "next":
+        return ["monitor halt", "nexti"]
+    if action == "step":
+        return ["monitor halt", "stepi"]
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="probe-rs GDB Server 调试")
     sub = parser.add_subparsers(dest="command")
@@ -386,6 +400,12 @@ def main() -> None:
             sys.exit(1)
 
         gdb_result = run_gdb_commands(str(params["gdb_exe"]), params["elf_file"] or "", f"localhost:{gdb_port}", gdb_commands)
+        if gdb_result["status"] == "timeout":
+            fallback_commands = stepping_fallback_commands(args.command)
+            if fallback_commands:
+                gdb_result = run_gdb_commands(str(params["gdb_exe"]), params["elf_file"] or "", f"localhost:{gdb_port}", fallback_commands)
+                if gdb_result["status"] == "ok":
+                    gdb_commands = fallback_commands
         elapsed_ms = (time.time() - started_ts) * 1000
 
         if gdb_result["status"] == "timeout" and args.command == "continue":
