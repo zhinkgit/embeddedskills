@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -31,13 +32,23 @@ from probe_rs_runtime import (  # noqa: E402
     now_iso,
     output_json,
     parameter_context,
-    resolve_artifact_param,
-    resolve_project_param,
-    resolve_tool_param,
     save_project_config,
     update_state_entry,
     workspace_root,
 )
+
+
+ERROR_PATTERNS = [
+    (r"no probes were found", "no_probe_found", "未检测到调试探针，请检查 USB 连接和驱动"),
+    (r"multiple probes were found", "multiple_probes", "检测到多个探针，请通过 --probe 显式指定"),
+    (r"chip.*not found", "chip_not_found", "未找到目标芯片描述，请确认 --chip 配置"),
+    (r"failed to open probe", "probe_open_failed", "打开调试探针失败，请检查探针占用、驱动和 USB 连接"),
+    (r"failed to open the debug probe", "probe_open_failed", "打开调试探针失败，请检查探针占用、驱动和 USB 连接"),
+    (r"error while probing target", "probe_open_failed", "打开调试探针失败，请检查探针占用、驱动和 USB 连接"),
+    (r"unexpected answer to command", "probe_protocol_error", "探针返回异常响应，请检查固件、驱动和链路稳定性"),
+    (r"permission denied", "permission_denied", "访问调试探针被拒绝，请检查驱动和权限"),
+    (r"timed out", "timeout", "操作超时，请检查连接和速度配置"),
+]
 
 
 def cleanup(proc: subprocess.Popen | None) -> None:
@@ -71,61 +82,68 @@ def _state_lookup(state: dict) -> dict:
     last_debug = get_state_entry(state, "last_debug")
     last_flash = get_state_entry(state, "last_flash")
     artifacts = last_build.get("artifacts", {})
+    last_debug_artifacts = (last_debug.get("artifacts") or {}) if isinstance(last_debug, dict) else {}
     return {
         "chip": last_debug.get("chip") or last_flash.get("chip"),
         "probe": last_debug.get("probe") or last_flash.get("probe"),
         "protocol": last_debug.get("protocol") or last_flash.get("protocol"),
         "speed": last_debug.get("speed") or last_flash.get("speed"),
         "connect_under_reset": last_debug.get("connect_under_reset") or last_flash.get("connect_under_reset"),
-        "elf_file": last_build.get("debug_file") or artifacts.get("debug_file"),
+        "elf_file": last_debug.get("debug_file") or last_debug_artifacts.get("debug_file") or last_build.get("debug_file") or artifacts.get("debug_file"),
     }
 
 
 def resolve_probe_params(args, config: dict, project_config: dict, state_lookup: dict) -> tuple[dict, dict]:
     parameter_sources: dict[str, str] = {}
 
-    exe, parameter_sources["exe"] = resolve_tool_param(
-        "exe",
-        args.exe,
-        local_config=config,
-        local_keys=["exe"],
-        path_candidates=["probe-rs.exe", "probe-rs"],
-        default="probe-rs",
-    )
-    chip, parameter_sources["chip"] = resolve_project_param(
-        "chip",
-        args.chip,
-        project_config=project_config,
-        project_keys=["chip"],
-        state_record=state_lookup,
-        state_keys=["chip"],
-    )
-    protocol, parameter_sources["protocol"] = resolve_project_param(
-        "protocol",
-        args.protocol,
-        project_config=project_config,
-        project_keys=["protocol"],
-        state_record=state_lookup,
-        state_keys=["protocol"],
-        default="swd",
-    )
-    probe, parameter_sources["probe"] = resolve_project_param(
-        "probe",
-        args.probe,
-        project_config=project_config,
-        project_keys=["probe"],
-        state_record=state_lookup,
-        state_keys=["probe"],
-    )
-    speed, parameter_sources["speed"] = resolve_project_param(
-        "speed",
-        args.speed,
-        project_config=project_config,
-        project_keys=["speed"],
-        state_record=state_lookup,
-        state_keys=["speed"],
-        default="4000",
-    )
+    exe = args.exe if not is_missing(args.exe) else config.get("exe") or "probe-rs"
+    parameter_sources["exe"] = "cli" if not is_missing(args.exe) else ("config:exe" if config.get("exe") else "default")
+
+    chip = args.chip
+    chip_source = "cli"
+    if is_missing(chip):
+        chip = project_config.get("chip")
+        chip_source = "project_config"
+    if is_missing(chip):
+        chip = state_lookup.get("chip")
+        chip_source = "state"
+    parameter_sources["chip"] = chip_source
+
+    protocol = args.protocol
+    protocol_source = "cli"
+    if is_missing(protocol):
+        protocol = project_config.get("protocol")
+        protocol_source = "project_config"
+    if is_missing(protocol):
+        protocol = state_lookup.get("protocol")
+        protocol_source = "state"
+    if is_missing(protocol):
+        protocol = "swd"
+        protocol_source = "default"
+    parameter_sources["protocol"] = protocol_source
+
+    probe = args.probe
+    probe_source = "cli"
+    if is_missing(probe):
+        probe = project_config.get("probe")
+        probe_source = "project_config"
+    if is_missing(probe):
+        probe = state_lookup.get("probe")
+        probe_source = "state"
+    parameter_sources["probe"] = probe_source
+
+    speed = args.speed
+    speed_source = "cli"
+    if is_missing(speed):
+        speed = project_config.get("speed")
+        speed_source = "project_config"
+    if is_missing(speed):
+        speed = state_lookup.get("speed")
+        speed_source = "state"
+    if is_missing(speed):
+        speed = "4000"
+        speed_source = "default"
+    parameter_sources["speed"] = speed_source
 
     connect_under_reset = args.connect_under_reset
     connect_source = "cli" if args.connect_under_reset else ""
@@ -143,15 +161,17 @@ def resolve_probe_params(args, config: dict, project_config: dict, state_lookup:
         connect_source = "default"
     parameter_sources["connect_under_reset"] = connect_source
 
-    elf_file, parameter_sources["elf"] = resolve_artifact_param(
-        "elf",
-        args.elf,
-        project_config=project_config,
-        project_keys=["elf", "default_elf"],
-        state_record=state_lookup,
-        state_keys=["elf_file"],
-        normalize_as_path=True,
-    )
+    elf_file = args.elf
+    elf_source = "cli"
+    if is_missing(elf_file):
+        elf_file = state_lookup.get("elf_file")
+        elf_source = "state"
+    if not is_missing(elf_file):
+        elf_file = normalize_path(str(elf_file))
+        if not Path(elf_file).is_file():
+            elf_file = ""
+            elf_source = "state:missing"
+    parameter_sources["elf"] = elf_source
 
     return (
         {
@@ -170,6 +190,8 @@ def resolve_probe_params(args, config: dict, project_config: dict, state_lookup:
 def build_attach_command(params: dict) -> list[str]:
     if is_missing(params["chip"]):
         raise ValueError("缺少必要参数: chip")
+    if is_missing(params["elf_file"]):
+        raise ValueError("缺少必要参数: elf，必须提供 --elf，或保证 last_debug/last_build 中存在有效 ELF 文件")
     cmd = [
         params["exe"],
         "attach",
@@ -185,9 +207,15 @@ def build_attach_command(params: dict) -> list[str]:
         cmd.extend(["--probe", params["probe"]])
     if params["connect_under_reset"]:
         cmd.append("--connect-under-reset")
-    if params["elf_file"]:
-        cmd.append(params["elf_file"])
+    cmd.append(params["elf_file"])
     return cmd
+
+
+def detect_runtime_error(text: str) -> tuple[str, str] | None:
+    for pattern, code, message in ERROR_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return code, message
+    return None
 
 
 def main() -> None:
@@ -261,6 +289,77 @@ def main() -> None:
     stdout_queue = start_stream_reader(proc.stdout)
     stderr_queue = start_stream_reader(proc.stderr)
 
+    startup_deadline = time.time() + 1.5
+    buffered_stdout: list[str] = []
+    buffered_stderr: list[str] = []
+    while time.time() < startup_deadline:
+        while True:
+            try:
+                item = stdout_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                break
+            buffered_stdout.append(item)
+        while True:
+            try:
+                item = stderr_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                break
+            buffered_stderr.append(item)
+        combined_startup = "\n".join(buffered_stderr + buffered_stdout)
+        startup_error = detect_runtime_error(combined_startup)
+        if startup_error:
+            cleanup(proc)
+            code, message = startup_error
+            result = make_result(
+                status="error",
+                action="rtt",
+                summary=message,
+                details={
+                    "chip": params["chip"],
+                    "command": cmd,
+                    "returncode": proc.poll() if proc.poll() is not None else 1,
+                    "output": combined_startup,
+                },
+                context=parameter_context(provider="probe-rs", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+                error={"code": code, "message": message},
+                timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+            )
+            if args.as_json:
+                output_json(result)
+            else:
+                print(f"错误: {message}", file=sys.stderr)
+            sys.exit(1)
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+
+    if proc.poll() is not None:
+        combined_startup = "\n".join(buffered_stderr + buffered_stdout)
+        message = combined_startup or "probe-rs RTT 启动失败"
+        result = make_result(
+            status="error",
+            action="rtt",
+            summary="probe-rs RTT 启动失败",
+            details={
+                "chip": params["chip"],
+                "command": cmd,
+                "returncode": proc.returncode,
+                "output": combined_startup,
+            },
+            context=parameter_context(provider="probe-rs", workspace=str(workspace), parameter_sources=parameter_sources, config_path=config_path),
+            error={"code": "startup_failed", "message": message},
+            timing=make_timing(started_at, (time.time() - started_ts) * 1000),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        sys.exit(1)
+
     state_info = update_state_entry(
         "last_observe",
         {
@@ -298,7 +397,12 @@ def main() -> None:
     deadline = time.time() + args.duration if args.duration > 0 else None
     stdout_done = False
     stderr_done = False
-    lines = 0
+    lines = len(buffered_stdout)
+
+    for item in buffered_stdout:
+        emit_stream_record(source="probe-rs", channel_type="rtt", text=item, as_json=args.as_json)
+    for item in buffered_stderr:
+        emit_stream_record(source="probe-rs", channel_type="rtt", stream_type="stderr", text=item, as_json=args.as_json)
 
     try:
         while True:

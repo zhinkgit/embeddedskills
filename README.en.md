@@ -243,7 +243,7 @@ workspace/
 | platformio | 🔧 To be supported |
 | jlink | ✅ Tested |
 | openocd | ✅ Tested |
-| probe-rs | 🔧 Pending |
+| probe-rs | ✅ Tested |
 | pyocd | 🔧 To be supported |
 | serial | ✅ Tested |
 | net | ✅ Tested |

@@ -240,7 +240,7 @@ workspace/
 | platformio | 🔧 待支持 |
 | jlink | ✅ 已完成测试 |
 | openocd | ✅ 已完成测试 |
-| probe-rs | 🔧 待测试 |
+| probe-rs | ✅ 已完成测试 |
 | pyocd | 🔧 待支持 |
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |

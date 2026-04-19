@@ -26,15 +26,13 @@ from gcc_runtime import (  # noqa: E402
     load_local_config,
     load_project_config,
     load_workspace_state,
-    resolve_project_param,
-    resolve_runtime_param,
-    resolve_tool_param,
     make_result,
     make_timing,
     normalize_path,
     now_iso,
     output_json,
     parameter_context,
+    resolve_param,
     save_project_config,
     update_state_entry,
     workspace_root,
@@ -140,6 +138,34 @@ def _build_summary(action: str, status: str, metrics: dict | None = None) -> str
     if action == "configure":
         return "configure 成功" if status == "ok" else "configure 失败"
     return "clean 成功" if status == "ok" else "clean 失败"
+
+
+TARGET_CLEAN_TIMEOUT_SECONDS = 5
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=1,
+                encoding="utf-8",
+                errors="replace",
+                **hidden_subprocess_kwargs(),
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            proc.kill()
+    else:
+        proc.kill()
+
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def run_configure(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
@@ -258,6 +284,8 @@ def run_build(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
 def run_clean(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
     project_path = Path(project).resolve()
     build_dir = _resolve_build_dir(project_path, preset, project_path / "CMakePresets.json")
+    fallback_reason = ""
+    fallback_output = ""
 
     if not build_dir.exists():
         return {
@@ -273,28 +301,37 @@ def run_clean(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
 
     if (build_dir / "build.ninja").exists() or (build_dir / "Makefile").exists():
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [cmake_exe, "--build", str(build_dir), "--target", "clean"],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=120,
                 encoding="utf-8",
                 errors="replace",
                 **hidden_subprocess_kwargs(),
             )
-            if proc.returncode == 0:
-                return {
-                    "status": "ok",
-                    "action": "clean",
-                    "details": {
-                        "project": str(project_path),
-                        "preset": preset,
-                        "build_dir": str(build_dir.resolve()),
-                        "mode": "target-clean",
-                    },
-                }
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+            try:
+                stdout, stderr = proc.communicate(timeout=TARGET_CLEAN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                _terminate_process_tree(proc)
+                fallback_reason = f"target clean 超时({TARGET_CLEAN_TIMEOUT_SECONDS}s)"
+                fallback_output = ""
+            else:
+                if proc.returncode == 0:
+                    return {
+                        "status": "ok",
+                        "action": "clean",
+                        "details": {
+                            "project": str(project_path),
+                            "preset": preset,
+                            "build_dir": str(build_dir.resolve()),
+                            "mode": "target-clean",
+                        },
+                    }
+                fallback_reason = f"target clean 返回码 {proc.returncode}"
+                fallback_output = (stdout or "") + ("\n" if stdout and stderr else "") + (stderr or "")
+        except FileNotFoundError:
+            fallback_reason = "target clean 无法执行"
 
     try:
         shutil.rmtree(str(build_dir))
@@ -309,6 +346,8 @@ def run_clean(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict:
             "preset": preset,
             "build_dir": str(build_dir.resolve()),
             "mode": "remove-tree",
+            "fallback_reason": fallback_reason,
+            "fallback_output": fallback_output.strip()[-500:] if fallback_output else "",
         },
     }
 
@@ -353,55 +392,66 @@ def main() -> None:
 
     parameter_sources: dict[str, str] = {}
     try:
-        # cmake_exe: CLI > 环境级配置 > PATH > 默认命令名
-        cmake_exe, parameter_sources["cmake"] = resolve_tool_param(
+        # cmake_exe: CLI > 环境级配置 > PATH 默认值(cmake)
+        cmake_exe, parameter_sources["cmake"] = resolve_param(
             "cmake",
             args.cmake,
-            local_config=local_config,
-            local_keys=["cmake_exe"],
-            path_candidates=["cmake.exe", "cmake"],
-            default="cmake",
+            config=local_config,
+            config_keys=["cmake_exe"],
         )
-
-        # project: CLI > 工程级配置 > state.json > 必需
-        project, parameter_sources["project"] = resolve_project_param(
+        if is_missing(cmake_exe):
+            cmake_exe = "cmake"
+            parameter_sources["cmake"] = "default:path:cmake"
+        
+        # project: CLI > 环境级配置 > 工程级配置 > state.json > 必需
+        project, parameter_sources["project"] = resolve_param(
             "project",
             args.project,
-            project_config=project_config,
-            project_keys=["project"],
-            state_record=last_build,
-            state_keys=["project"],
-            required=True,
+            config=local_config,
+            config_keys=["default_project"],
         )
         if not is_missing(project):
             project = _resolve_project_path(workspace, str(project))
+        # 工程级配置（优先于 state）
+        if is_missing(project) and not is_missing(project_config.get("project")):
+            project = _resolve_project_path(workspace, project_config.get("project"))
+            parameter_sources["project"] = "project_config:project"
+        # state.json（最后 fallback）
+        if is_missing(project) and not is_missing(last_build.get("project")):
+            project = _resolve_project_path(workspace, str(last_build.get("project")))
+            parameter_sources["project"] = "state:project"
         if is_missing(project):
             raise ValueError("缺少必要参数: project")
-
-        # preset: CLI > 工程级配置 > state.json > 必需
-        preset, parameter_sources["preset"] = resolve_project_param(
+        
+        # preset: CLI > 环境级配置 > 工程级配置 > state.json > 必需
+        preset, parameter_sources["preset"] = resolve_param(
             "preset",
             args.preset,
-            project_config=project_config,
-            project_keys=["preset"],
-            state_record=last_build,
-            state_keys=["preset"],
-            required=True,
+            config=local_config,
+            config_keys=["default_preset"],
         )
-
-        # log_dir: CLI > 工程级配置 > 环境级配置 > state.json > 默认值
-        log_dir_raw, parameter_sources["log_dir"] = resolve_runtime_param(
-            "log_dir",
-            args.log_dir,
-            project_config=project_config,
-            project_keys=["log_dir"],
-            local_config=local_config,
-            local_keys=["log_dir"],
-            state_record=last_build,
-            state_keys=["log_dir"],
-            default=".embeddedskills/build",
-        )
+        # 工程级配置（优先于 state）
+        if is_missing(preset) and not is_missing(project_config.get("preset")):
+            preset = project_config.get("preset")
+            parameter_sources["preset"] = "project_config:preset"
+        # state.json（最后 fallback）
+        if is_missing(preset) and not is_missing(last_build.get("preset")):
+            preset = last_build.get("preset")
+            parameter_sources["preset"] = "state:preset"
+        if is_missing(preset):
+            raise ValueError("缺少必要参数: preset")
+        
+        # log_dir: CLI > 工程级配置 > 环境级配置 > 默认值(.embeddedskills/build)
+        log_dir_raw = args.log_dir or project_config.get("log_dir") or local_config.get("log_dir")
         log_dir = _resolve_workspace_path(workspace, log_dir_raw, ".embeddedskills/build")
+        if args.log_dir:
+            parameter_sources["log_dir"] = "cli"
+        elif project_config.get("log_dir"):
+            parameter_sources["log_dir"] = "project_config:log_dir"
+        elif local_config.get("log_dir"):
+            parameter_sources["log_dir"] = "config:log_dir"
+        else:
+            parameter_sources["log_dir"] = "default"
     except ValueError as exc:
         result = make_result(
             status="error",

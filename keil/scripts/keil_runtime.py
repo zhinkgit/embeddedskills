@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from shutil import which
 from typing import Any
 
 
@@ -204,165 +204,20 @@ def _first_resolved(mapping: dict, keys: list[str]) -> tuple[Any, str | None]:
     return None, None
 
 
-def normalize_command_value(value: str | None) -> str:
-    if is_missing(value):
-        return ""
-    candidate = str(value).strip()
-    expanded = Path(candidate).expanduser()
-    if expanded.exists():
-        return str(expanded.resolve())
-    resolved = shutil.which(candidate)
-    if resolved:
-        return normalize_path(resolved)
-    return candidate
-
-
-def resolve_path_candidate(candidates: list[str] | tuple[str, ...] | None) -> tuple[str, str]:
-    for candidate in candidates or []:
-        if is_missing(candidate):
-            continue
-        resolved = shutil.which(str(candidate))
-        if resolved:
-            return normalize_path(resolved), f"path:{candidate}"
-    return "", ""
-
-
-def resolve_tool_param(
-    name: str,
-    cli_value: Any,
-    *,
-    local_config: dict | None = None,
-    local_keys: list[str] | None = None,
-    path_candidates: list[str] | tuple[str, ...] | None = None,
-    default: Any = None,
-    required: bool = False,
-) -> tuple[Any, str]:
-    if not is_missing(cli_value):
-        value = normalize_command_value(str(cli_value))
-        source = "cli"
-    else:
-        value = None
-        source = ""
-        if local_config and local_keys:
-            value, local_key = _first_resolved(local_config, local_keys)
-            if not is_missing(value):
-                value = normalize_command_value(str(value))
-                source = f"config:{local_key}"
-        if is_missing(value):
-            value, source = resolve_path_candidate(path_candidates)
-        if is_missing(value) and not is_missing(default):
-            value = default
-            source = f"default:{default}" if isinstance(default, str) else "default"
-    if required and is_missing(value):
-        raise ValueError(f"缺少必要参数: {name}")
-    return value, source
-
-
-def resolve_project_param(
-    name: str,
-    cli_value: Any,
-    *,
-    project_config: dict | None = None,
-    project_keys: list[str] | None = None,
-    state_record: dict | None = None,
-    state_keys: list[str] | None = None,
-    default: Any = None,
-    required: bool = False,
-    normalize_as_path: bool = False,
-    workspace: str | None = None,
-) -> tuple[Any, str]:
-    if not is_missing(cli_value):
-        value = cli_value
-        source = "cli"
-    else:
-        value = None
-        source = ""
-        if project_config and project_keys:
-            value, project_key = _first_resolved(project_config, project_keys)
-            if not is_missing(value):
-                source = f"project_config:{project_key}"
-        if is_missing(value) and state_record and state_keys:
-            value, state_key = _first_resolved(state_record, state_keys)
-            if not is_missing(value):
-                source = f"state:{state_key}"
-        if is_missing(value) and not is_missing(default):
-            value = default
-            source = "default"
-    if normalize_as_path and not is_missing(value):
-        value = normalize_path_with_base(str(value), workspace_root(workspace))
-    if required and is_missing(value):
-        raise ValueError(f"缺少必要参数: {name}")
-    return value, source
-
-
-def resolve_runtime_param(
-    name: str,
-    cli_value: Any,
-    *,
-    project_config: dict | None = None,
-    project_keys: list[str] | None = None,
-    local_config: dict | None = None,
-    local_keys: list[str] | None = None,
-    state_record: dict | None = None,
-    state_keys: list[str] | None = None,
-    default: Any = None,
-    required: bool = False,
-    normalize_as_path: bool = False,
-    workspace: str | None = None,
-) -> tuple[Any, str]:
-    if not is_missing(cli_value):
-        value = cli_value
-        source = "cli"
-    else:
-        value = None
-        source = ""
-        if project_config and project_keys:
-            value, project_key = _first_resolved(project_config, project_keys)
-            if not is_missing(value):
-                source = f"project_config:{project_key}"
-        if is_missing(value) and local_config and local_keys:
-            value, local_key = _first_resolved(local_config, local_keys)
-            if not is_missing(value):
-                source = f"config:{local_key}"
-        if is_missing(value) and state_record and state_keys:
-            value, state_key = _first_resolved(state_record, state_keys)
-            if not is_missing(value):
-                source = f"state:{state_key}"
-        if is_missing(value) and not is_missing(default):
-            value = default
-            source = "default"
-    if normalize_as_path and not is_missing(value):
-        value = normalize_path_with_base(str(value), workspace_root(workspace))
-    if required and is_missing(value):
-        raise ValueError(f"缺少必要参数: {name}")
-    return value, source
-
-
-def resolve_artifact_param(
-    name: str,
-    cli_value: Any,
-    *,
-    project_config: dict | None = None,
-    project_keys: list[str] | None = None,
-    state_record: dict | None = None,
-    state_keys: list[str] | None = None,
-    default: Any = None,
-    required: bool = False,
-    normalize_as_path: bool = False,
-    workspace: str | None = None,
-) -> tuple[Any, str]:
-    return resolve_project_param(
-        name,
-        cli_value,
-        project_config=project_config,
-        project_keys=project_keys,
-        state_record=state_record,
-        state_keys=state_keys,
-        default=default,
-        required=required,
-        normalize_as_path=normalize_as_path,
-        workspace=workspace,
-    )
+def _auto_detect_uv4() -> str:
+    candidates = [
+        which("UV4.exe"),
+        which("UV4"),
+        r"C:\Keil_v5\UV4\UV4.exe",
+        r"C:\Keil_v5\ARM\UV4\UV4.exe",
+    ]
+    keil_root = os.environ.get("KEIL_ROOT", "")
+    if keil_root:
+        candidates.append(str(Path(keil_root) / "UV4" / "UV4.exe"))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(Path(candidate).resolve())
+    return ""
 
 
 def resolve_param(
@@ -391,6 +246,10 @@ def resolve_param(
             value, state_key = _first_resolved(state_record, state_keys)
             if not is_missing(value):
                 source = f"state:{state_key}"
+        if is_missing(value) and name == "uv4":
+            value = _auto_detect_uv4()
+            if not is_missing(value):
+                source = "auto:uv4"
     if normalize_as_path and not is_missing(value):
         value = normalize_path_with_base(str(value), workspace_root(workspace))
     if required and is_missing(value):
