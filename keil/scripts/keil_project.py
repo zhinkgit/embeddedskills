@@ -74,8 +74,8 @@ def main():
                 print("未找到 Keil 工程文件")
             else:
                 print(f"找到 {len(projects)} 个工程：")
-                for p in projects:
-                    print(f"  [{p['type']}] {p['path']}")
+                for i, p in enumerate(projects, 1):
+                    print(f"  {i}. [{p['type']}] {p['name']} — {p['path']}")
 
     elif args.command == "targets":
         try:
@@ -96,8 +96,8 @@ def main():
                     print("未找到 Target")
                 else:
                     print(f"工程 {args.project} 包含 {len(targets)} 个 Target：")
-                    for t in targets:
-                        print(f"  - {t['name']}")
+                    for i, t in enumerate(targets, 1):
+                        print(f"  {i}. {t['name']}")
         except (FileNotFoundError, ValueError) as e:
             result = {
                 "status": "error",
