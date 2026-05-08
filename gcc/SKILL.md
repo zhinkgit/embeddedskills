@@ -62,6 +62,8 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 4. state.json（上次构建记录）
 5. 搜索/询问
 
+冲突解决规则：同一参数存在多个来源时，以序号最小的来源为准；高序号来源仅在低序号来源未提供该参数时生效。例如：CLI 已指定 `--preset Debug`，则忽略 state.json 中记录的上次 preset。
+
 ## 子命令
 
 | 子命令 | 用途 | 风险 |
@@ -77,7 +79,7 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 ## 执行流程
 
 1. 读取 `config.json`，确认 `cmake_exe` 路径有效
-2. 未指定子命令时默认执行 `scan`
+2. 未提供有效子命令时默认执行 `scan`
 3. 未提供工程路径时先执行 `scan` 搜索工程
 4. 发现多个工程或多个 preset 时列出选项让用户选择，绝不自动猜测
 5. `configure/build/rebuild/clean` 按 `operation_mode` 决定是否需要确认

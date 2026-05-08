@@ -5,7 +5,8 @@ description: >-
   当用户提到 Wireshark、tshark、Npcap、抓包、网络联调、端口扫描、连通性排查、pcap 分析、
   网络接口、ping 测试、traceroute、流量统计、Modbus TCP、EtherNet/IP 等网络协议调试时自动触发，
   也兼容 /net 显式调用。即使用户只是说"抓个包看看"、"扫一下端口"、"网络通不通"或"分析一下这个 pcap"，
-  只要上下文涉及网络通信调试就应触发此 skill。
+  只要上下文中出现具体工具名（tshark、Wireshark、Npcap）、协议名（Modbus TCP、EtherNet/IP、ICMP 等）、
+  调试动作（抓包、端口扫描、连通性测试、ping、traceroute、流量统计、pcap 分析）或网络接口操作，就应触发此 skill。
 argument-hint: "[iface|capture|analyze|ping|scan|stats] ..."
 ---
 
@@ -73,8 +74,8 @@ argument-hint: "[iface|capture|analyze|ping|scan|stats] ..."
 
 ## 执行流程
 
-1. 检查 `tshark` 是否可用
-2. 按优先级解析参数：CLI > 工程级配置 > 状态文件 > 默认值
+1. 检查 `tshark` 是否可用；若不可用，提示用户安装 Wireshark（含 tshark）并确认已加入 PATH；若需要抓包，还需提示安装 Npcap 驱动；依赖缺失时终止执行并输出 `status: error` 及安装指引
+2. 按优先级解析参数：CLI > 工程级配置 > 状态文件 > 默认值；若多个来源对同一参数均有值，以更高优先级来源为准，并在输出 summary 中注明被覆盖的来源
 3. 若无子命令，默认执行 `iface`（列出网络接口）
 4. 成功执行后，将确认的参数写回工程配置
 5. 运行对应脚本并输出结构化 JSON 结果

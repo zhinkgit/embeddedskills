@@ -5,7 +5,7 @@ description: >-
   当用户提到 CAN、CAN-FD、DBC 解码、总线抓包、USB-CAN 联调、报文发送、总线统计、
   PCAN、Vector、slcan、CAN 接口扫描、CAN ID 过滤、ASC 日志、BLF 文件时自动触发，
   也兼容 /can 显式调用。即使用户只是说"看看 CAN 报文"、"发一帧试试"或"解码一下 DBC"，
-  只要上下文涉及 CAN 总线通信就应触发此 skill。
+  只要上下文明确提到 CAN 总线通信的操作或问题就应触发此 skill。
 argument-hint: "[scan|monitor|send|log|decode|stats] ..."
 ---
 
@@ -64,10 +64,12 @@ argument-hint: "[scan|monitor|send|log|decode|stats] ..."
 
 ### 自动扫描行为
 
-当未指定 `interface` 和 `channel` 时，脚本会自动扫描系统 CAN 接口：
-- 若只找到一个接口，自动使用并写入工程配置
-- 若找到多个接口，返回候选列表让用户选择
-- 若未找到接口，提示错误
+当未指定 `interface` 和 `channel` 时，脚本会自动扫描系统 CAN 接口，按以下步骤处理：
+
+1. 扫描系统中所有可用 CAN 接口
+2. 若只找到一个接口 → 自动使用并写入工程配置
+3. 若找到多个接口 → 返回候选列表，等待用户选择
+4. 若未找到接口 → 提示错误，停止执行
 
 ## 子命令
 
@@ -146,7 +148,7 @@ python scripts/can_stats.py [--interface <接口>] [--channel <通道>] [--bitra
 ## 核心规则
 
 - 不自动猜测 interface、channel、bitrate，多接口时不自动选择
-- 参数解析优先级：CLI > 工程级配置 > 状态文件 > 默认值
+- 参数解析优先级：CLI > 工程级配置 > 状态文件 > 默认值；自动扫描结果仅在未提供 CLI 参数时生效
 - 未指定 `interface`/`channel` 时自动扫描，唯一候选自动写入配置，多候选需用户选择
 - 成功执行后，确认的参数自动写回 `.embeddedskills/config.json`
 - 未明确说明用途时不主动发送任何报文

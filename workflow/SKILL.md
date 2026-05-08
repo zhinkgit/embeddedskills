@@ -3,8 +3,7 @@ name: workflow
 description: >-
   embeddedskills 的薄编排层，用于在当前 workspace 中发现工程、选择 build/flash/debug/observe
   后端、串联 .embeddedskills/state.json，并聚合底层 skill 的结果。
-  当用户提到"一键构建烧录""自动诊断""串起 build -> flash -> debug -> observe"
-  或显式调用 /workflow 时触发。
+  当用户明确输入以下命令之一："一键构建烧录"、"自动诊断"、"串起 build -> flash -> debug -> observe" 或显式调用 /workflow 时触发。
 argument-hint: "[plan|build|build-flash|build-debug|observe|diagnose] ..."
 ---
 
@@ -49,9 +48,22 @@ workflow 通过读取 `.embeddedskills/config.json` 中其他 skill 的配置段
 
 ### 参数解析顺序
 
-1. **CLI 参数**（如 `--build-backend=keil`）优先级最高
-2. **`.embeddedskills/config.json`** 中的 `workflow` 段配置
-3. **自动发现**（当 `preferred_*` 为 `"auto"` 时）
+按以下决策树依次判断，命中即停止：
+
+1. **CLI 参数**（优先级最高）
+   - 条件：用户在命令行传入 `--build-backend`、`--flash-backend` 等参数
+   - 示例：`workflow_run.py build-flash --build-backend=keil --flash-backend=jlink`
+   - 行为：直接使用该参数指定的后端，跳过后续步骤
+
+2. **配置文件**（次优先）
+   - 条件：CLI 未指定，且 `.embeddedskills/config.json` 的 `workflow` 段中对应 `preferred_*` 字段不为 `"auto"`
+   - 示例：`"preferred_build": "keil"` → 使用 keil 作为构建后端
+   - 行为：读取配置值并使用，跳过自动发现
+
+3. **自动发现**（兜底）
+   - 条件：CLI 未指定，且配置中 `preferred_*` 为 `"auto"` 或字段缺失
+   - 示例：`"preferred_flash": "auto"` → 扫描 workspace 自动推断可用 flash 后端
+   - 行为：枚举候选后端列表；若唯一则直接使用，若多个则返回列表请用户确认
 
 成功执行后，实际使用的后端会自动写回 `.embeddedskills/config.json` 的 `workflow` 段。
 

@@ -66,7 +66,7 @@ board/interface/target 等工程参数统一在工作区的 `.embeddedskills/con
 - `transport`：传输协议（swd/jtag）
 - `tpiu_name` / `traceclk` / `pin_freq`：ITM/SWO 观测所需的 TPIU 参数
 
-参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
 
 成功执行后，确认过的参数会自动写回工程配置。
 
@@ -118,7 +118,7 @@ board/interface/target 等工程参数统一在工作区的 `.embeddedskills/con
 1. 读取 `skill/config.json`，确认 `exe` 路径有效
 2. 读取 `.embeddedskills/config.json` 获取工程级配置（board/interface/target 等）
 3. 读取 `.embeddedskills/state.json` 获取历史状态
-4. 参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+4. 参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
 5. 已知 `board` 时优先使用 `-f board/*.cfg`，否则组合 `-f interface/*.cfg -f target/*.cfg`
 6. `board`、`interface`、`target` 同时缺失时，不自动拼接组合，直接要求用户补充
 7. 按 `operation_mode` 决定是否需要确认后执行

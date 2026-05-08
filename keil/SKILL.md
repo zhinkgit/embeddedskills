@@ -53,7 +53,7 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 1. CLI 显式参数
 2. 环境级配置（skill/config.json）
 3. 工程级配置（.embeddedskills/config.json）
-4. state.json（上次构建记录）
+4. `.embeddedskills/state.json`（上次构建记录）
 5. 搜索/询问
 
 ## 子命令
@@ -139,7 +139,7 @@ python <skill-dir>/scripts/keil_build.py <build|rebuild|clean|flash> \
 
 - 不修改工程配置文件（.uvprojx / .uvmpw / .uvoptx）
 - 不自动猜测工程路径或 Target，有歧义时必须询问用户
-- 参数解析优先级为：CLI 显式参数 > 环境级配置 > 工程级配置 > `.embeddedskills/state.json` > 搜索/询问
+- 参数解析优先级详见上方"参数解析优先级"章节
 - 构建成功后优先使用返回的 `flash_file` / `debug_file` 与 `jlink/openocd` 串联
 - `flash` 前必须确认最近一次构建成功（errors == 0）
 - `clean` 不在自动流程中隐式执行
