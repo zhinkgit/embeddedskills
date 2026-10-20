@@ -2,18 +2,16 @@
 """网络接口发现工具，可关联 tshark 抓包接口列表。"""
 
 import argparse
-import io
 import json
+import subprocess
 import sys
 
-# 确保 stdout 使用 UTF-8 编码
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-from net_runtime import parse_ipconfig, parse_tshark_interfaces
+from net_runtime import list_network_interfaces, parse_tshark_interfaces
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="列出网络接口")
     parser.add_argument("--filter", default="", help="按关键词筛选接口")
     parser.add_argument("--tshark", action="store_true", help="同时显示 tshark 抓包接口")
@@ -21,7 +19,15 @@ def main():
     parser.add_argument("--tshark-exe", default="tshark", help="tshark 路径")
     args = parser.parse_args()
 
-    interfaces = parse_ipconfig()
+    try:
+        interfaces = list_network_interfaces()
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+        result = {"status": "error", "action": "iface", "error": {"code": "interface_scan_failed", "message": str(exc)}}
+        if args.output_json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"网络接口枚举失败: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if args.filter:
         kw = args.filter.lower()

@@ -16,6 +16,7 @@ Claude Code skill，用于嵌入式网络通信调试：接口发现、抓包、
 - [Wireshark](https://www.wireshark.org/) — 提供 tshark、dumpcap、capinfos（安装时勾选命令行工具并加入 PATH）
 - [Npcap](https://npcap.com/) — Windows 抓包驱动（Wireshark 安装时可一并安装）
 - Python 3.x（仅标准库，无额外依赖）
+- 接口枚举、ICMP ping 和路由追踪支持 Windows / Linux。Linux 需要 `iproute2`（`ip`）、`iputils-ping`（`ping`）和 `traceroute`；其他平台暂不支持这三项功能，TCP 连通性测试使用 Python socket。
 - 抓包可能需要管理员权限
 
 ## 配置

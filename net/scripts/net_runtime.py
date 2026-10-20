@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -289,12 +291,11 @@ def parse_tshark_interfaces(tshark_exe: str = "tshark") -> list[dict] | None:
 
 def parse_ipconfig() -> list[dict]:
     """解析 ipconfig /all 获取网络接口信息"""
-    try:
-        result = subprocess.run(
-            ["ipconfig", "/all"], capture_output=True, text=True, encoding="gbk", errors="replace"
-        )
-    except FileNotFoundError:
-        return []
+    result = subprocess.run(
+        ["ipconfig", "/all"], capture_output=True, text=True, encoding="gbk", errors="replace", timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or "ipconfig 执行失败")
 
     interfaces = []
     current = None
@@ -388,6 +389,48 @@ def parse_ipconfig() -> list[dict]:
     if current:
         interfaces.append(current)
 
+    return interfaces
+
+
+def list_network_interfaces() -> list[dict]:
+    """使用平台命令枚举接口，保留统一的地址、掩码和网关字段。"""
+    system = platform.system()
+    if system == "Windows":
+        return parse_ipconfig()
+    if system != "Linux":
+        raise RuntimeError(f"网络接口枚举暂不支持此平台: {system}")
+
+    outputs = []
+    for command in (["ip", "-j", "addr"], ["ip", "-j", "route", "show", "default"]):
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout).strip() or "ip 命令执行失败")
+        data = json.loads(result.stdout)
+        if not isinstance(data, list):
+            raise ValueError("ip 命令未返回 JSON 数组")
+        outputs.append(data)
+
+    addresses, routes = outputs
+    interfaces = []
+    for entry in addresses:
+        ipv4_entries = [addr for addr in entry.get("addr_info", []) if addr.get("family") == "inet"]
+        ipv4_list = [addr["local"] for addr in ipv4_entries]
+        subnet_list = [str(ipaddress.IPv4Network(f"0.0.0.0/{addr['prefixlen']}").netmask) for addr in ipv4_entries]
+        gateways = [route["gateway"] for route in routes if route.get("dev") == entry["ifname"] and route.get("gateway")]
+        interfaces.append({
+            "name": entry["ifname"],
+            "type": entry.get("link_type", ""),
+            "description": entry.get("ifalias", ""),
+            "mac": entry.get("address", ""),
+            "ipv4": ipv4_list[0] if ipv4_list else "",
+            "ipv4_list": ipv4_list,
+            "subnet": subnet_list[0] if subnet_list else "",
+            "subnet_list": subnet_list,
+            "gateway": gateways[0] if gateways else "",
+            "gateway_list": gateways,
+            "dhcp": "enabled" if any(addr.get("dynamic") for addr in ipv4_entries) else "",
+            "status": "up" if "UP" in entry.get("flags", []) and entry.get("operstate", "UNKNOWN").upper() in {"UP", "UNKNOWN"} else "down",
+        })
     return interfaces
 
 

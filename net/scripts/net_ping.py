@@ -2,18 +2,14 @@
 """连通性测试工具，支持 ICMP/TCP ping、批量测试和路由追踪。"""
 
 import argparse
-import io
 import json
 import os
+import platform
 import re
 import socket
 import subprocess
 import sys
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from net_runtime import (
     get_net_config,
@@ -24,13 +20,22 @@ from net_runtime import (
 
 def icmp_ping(target, count=4, timeout_ms=1000):
     """使用系统 ping 命令做 ICMP 测试。"""
-    timeout_sec = max(1, timeout_ms // 1000)
-    cmd = ["ping", "-n", str(count), "-w", str(timeout_ms), target]
+    system = platform.system()
+    timeout_sec = max(1, (timeout_ms + 999) // 1000)
+    if system == "Windows":
+        cmd = ["ping", "-n", str(count), "-w", str(timeout_ms), target]
+    elif system == "Linux":
+        cmd = ["ping", "-n", "-c", str(count), "-W", str(timeout_sec), target]
+    else:
+        return {"target": target, "reachable": False, "error": f"ICMP ping 暂不支持此平台: {system}"}
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="gbk",
-                                errors="replace", timeout=count * timeout_sec + 10)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {"target": target, "reachable": False, "error": "ping 命令超时或不可用"}
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="gbk" if system == "Windows" else "utf-8", errors="replace",
+            env={**os.environ, "LC_ALL": "C"}, timeout=count * (timeout_sec + 1) + 10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"target": target, "reachable": False, "error": f"ping 执行失败: {exc}"}
 
     output = result.stdout
     reachable = False
@@ -42,6 +47,8 @@ def icmp_ping(target, count=4, timeout_ms=1000):
         m = re.search(r"已发送\s*=\s*(\d+).*已接收\s*=\s*(\d+)", line)
         if not m:
             m = re.search(r"Sent\s*=\s*(\d+).*Received\s*=\s*(\d+)", line, re.IGNORECASE)
+        if not m:
+            m = re.search(r"(\d+) packets transmitted,\s*(\d+) (?:packets )?received", line)
         if m:
             sent = int(m.group(1))
             received = int(m.group(2))
@@ -53,6 +60,15 @@ def icmp_ping(target, count=4, timeout_ms=1000):
             m2 = re.search(r"Average\s*=\s*(\d+)ms", line, re.IGNORECASE)
         if m2:
             avg_ms = int(m2.group(1))
+        linux_rtt = re.search(r"(?:rtt|round-trip) min/avg/max/(?:mdev|stddev)\s*=\s*[\d.]+/([\d.]+)/", line)
+        if linux_rtt:
+            avg_ms = float(linux_rtt.group(1))
+
+    if sent == 0 or result.returncode not in (0, 1):
+        return {
+            "target": target, "reachable": False,
+            "error": (result.stderr or output).strip() or f"ping 未返回有效统计，退出码 {result.returncode}",
+        }
 
     return {
         "target": target,
@@ -81,13 +97,23 @@ def tcp_ping(target, port, timeout_ms=1000):
 
 def traceroute(target, timeout_ms=1000):
     """路由追踪。"""
-    timeout_sec = max(1, timeout_ms // 1000)
-    cmd = ["tracert", "-d", "-w", str(timeout_ms), "-h", "30", target]
+    system = platform.system()
+    if system == "Windows":
+        cmd = ["tracert", "-d", "-w", str(timeout_ms), "-h", "30", target]
+    elif system == "Linux":
+        cmd = ["traceroute", "-n", "-w", str(timeout_ms / 1000.0), "-m", "30", target]
+    else:
+        return {"target": target, "hops": [], "error": f"路由追踪暂不支持此平台: {system}"}
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="gbk",
-                                errors="replace", timeout=60)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {"target": target, "hops": [], "error": "tracert 超时或不可用"}
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="gbk" if system == "Windows" else "utf-8", errors="replace",
+            env={**os.environ, "LC_ALL": "C"}, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"target": target, "hops": [], "error": f"{cmd[0]} 执行失败: {exc}"}
+    if result.returncode != 0:
+        return {"target": target, "hops": [], "error": (result.stderr or result.stdout).strip() or f"{cmd[0]} 退出码 {result.returncode}"}
 
     hops = []
     for line in result.stdout.splitlines():
@@ -102,6 +128,8 @@ def traceroute(target, timeout_ms=1000):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="连通性测试")
     parser.add_argument("--target", "-t", help="目标地址")
     parser.add_argument("--tcp", type=int, default=0, help="TCP 端口")
@@ -120,6 +148,9 @@ def main():
 
     target = config["target"]
     timeout_ms = config["timeout_ms"]
+
+    if args.count <= 0 or timeout_ms <= 0:
+        parser.error("--count 和 --timeout 必须大于 0")
 
     if not target:
         error = {
@@ -158,9 +189,10 @@ def main():
     reachable_count = sum(1 for r in results if r.get("reachable", False))
     total = len(results)
     action = "traceroute" if args.traceroute else ("tcp_ping" if args.tcp > 0 else "ping")
+    execution_failed = action != "tcp_ping" and any(r.get("error") for r in results)
 
     output = {
-        "status": "ok",
+        "status": "error" if execution_failed else "ok",
         "action": action,
         "summary": {
             "total": total,
@@ -169,6 +201,8 @@ def main():
         },
         "details": {"results": results},
     }
+    if execution_failed:
+        output["error"] = {"code": "command_failed", "message": "网络诊断命令执行失败，详见 results"}
 
     if args.output_json:
         print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -179,6 +213,8 @@ def main():
                 print(f"\n  追踪 {r['target']}:")
                 for h in r.get("hops", []):
                     print(f"    {h['hop']:>3}  {h['detail']}")
+                if r.get("error"):
+                    print(f"    {r['error']}")
             else:
                 icon = "+" if r.get("reachable") else "x"
                 line = f"  [{icon}] {r['target']}"
@@ -193,6 +229,9 @@ def main():
                 if r.get("error"):
                     line += f"  ({r['error']})"
                 print(line)
+
+    if execution_failed:
+        sys.exit(1)
 
     # 更新状态
     update_state_entry("last_net_ping", {

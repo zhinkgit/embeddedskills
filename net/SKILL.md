@@ -27,6 +27,7 @@ argument-hint: "[iface|capture|analyze|ping|scan|stats] ..."
 - `dumpcap` (随 Wireshark 安装)
 - 可选: `capinfos`
 - Windows 自带: `ipconfig`、`ping`、`tracert`、`netstat`、`arp`、`nslookup`
+- Linux 接口枚举 / ICMP ping / 路由追踪分别需要 `iproute2`（`ip`）、`iputils-ping`（`ping`）、`traceroute`；这三项功能仅支持 Windows / Linux
 - Python 3.x (仅标准库)
 - 抓包需要 Npcap 驱动，部分环境需管理员权限
 
