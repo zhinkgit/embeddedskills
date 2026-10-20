@@ -64,6 +64,8 @@ argument-hint: "[scan|monitor|send|log|decode|stats] ..."
 
 ### 自动扫描行为
 
+`scan` 的 `details.interfaces` 及摘要数量只包含检测到的 USB-CAN 设备和 SocketCAN 接口。`details.registered_backends` 单独列出已注册的软件后端，不代表驱动可用或硬件已连接，也不参与自动选择。
+
 当未指定 `interface` 和 `channel` 时，脚本会自动扫描系统 CAN 接口，按以下步骤处理：
 
 1. 扫描系统中所有可用 CAN 接口

@@ -70,6 +70,8 @@ Claude Code skill，用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、�
 
 ### 自动扫描行为
 
+`scan` 的接口列表和数量仅包含检测到的 USB-CAN 设备及 SocketCAN 接口。JSON 的 `details.registered_backends` 单独列出 python-can 已注册的后端类型；注册不代表驱动可用或设备已连接，后端类型不参与自动选择。
+
 当未指定 `interface` 和 `channel` 时，脚本会自动扫描系统 CAN 接口：
 - 若只找到一个接口，自动使用并写入工程配置
 - 若找到多个接口，返回候选列表让用户选择

@@ -67,18 +67,18 @@ def infer_binary_format(file_path: str) -> str:
 def parse_output(text: str, action: str) -> dict:
     parsed = {"raw": text}
     for pattern, code, message in ERROR_PATTERNS:
+        if action == "list" and code == "no_probe_found":
+            continue
         if re.search(pattern, text, re.IGNORECASE):
             return {"error_code": code, "error_message": message, "raw": text}
 
     if action == "list":
         probes = []
         for line in text.splitlines():
-            item = line.strip()
-            if not item or item.lower().startswith("the following debug probes were found"):
-                continue
-            probes.append(item)
-        if probes:
-            parsed["probes"] = probes
+            item = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
+            if re.match(r"^\[\d+\]:\s+\S", item):
+                probes.append(item)
+        parsed["probes"] = probes
     elif action == "read-mem":
         words = re.findall(r"\b[0-9a-fA-F]{2,16}\b", text)
         if words:
@@ -94,8 +94,10 @@ def parse_output(text: str, action: str) -> dict:
 
 
 def _summary(action: str, parsed: dict, fallback: str) -> str:
-    if action == "list" and parsed.get("probes"):
-        return f"已发现 {len(parsed['probes'])} 个调试探针"
+    if action == "list":
+        if parsed.get("probes"):
+            return f"已发现 {len(parsed['probes'])} 个调试探针"
+        return "未检测到调试探针，请检查 USB 连接和驱动"
     if action == "flash":
         return "烧录成功"
     if action == "erase":

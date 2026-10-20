@@ -210,7 +210,7 @@ def load_known_devices() -> tuple[list, list]:
 
 
 def check_interface_available(interface_name: str) -> bool:
-    """尝试导入对应后端，判断是否可用"""
+    """检查后端是否注册，不代表驱动可用或设备已连接。"""
     try:
         from can.interfaces import VALID_INTERFACES
         return interface_name in VALID_INTERFACES
@@ -302,6 +302,12 @@ def scan_socketcan() -> list[dict]:
     return interfaces
 
 
+def list_registered_backends() -> list[str]:
+    """列出已知且在 python-can 中注册的后端类型。"""
+    _, known_interfaces = load_known_devices()
+    return [item["interface"] for item in known_interfaces if check_interface_available(item["interface"])]
+
+
 def scan_can_interfaces() -> tuple[list[dict], str | None]:
     """扫描所有可用 CAN 接口"""
     try:
@@ -332,22 +338,6 @@ def scan_can_interfaces() -> tuple[list[dict], str | None]:
             "pid": "",
             "status": iface["status"],
         })
-
-    # 3. 检查已知后端可用性
-    _, known_interfaces = load_known_devices()
-    backends_found = {r["interface"] for r in results}
-    for ki in known_interfaces:
-        iface_name = ki["interface"]
-        if iface_name not in backends_found:
-            if check_interface_available(iface_name):
-                results.append({
-                    "interface": iface_name,
-                    "channel": "",
-                    "device": "",
-                    "vid": "",
-                    "pid": "",
-                    "status": "backend_available",
-                })
 
     return results, None
 
