@@ -4,7 +4,7 @@
 设计约定：
 - 只读检查，默认不修改源文件；
 - 统一 JSON 输出，退出码：0 通过、1 失败（error.code 区分原因）、130 中断；
-- 工具缺失不静默成功；配置损坏直接报错，不返回空配置;
+- 工具缺失/运行失败不静默成功；配置损坏直接报错，不返回空配置；
 - 成功后把最近一次检查写入 .embeddedskills/state.json 的 last_check 段。
 """
 
@@ -36,6 +36,7 @@ from codecheck_runtime import (
     workspace_root,
 )
 from codecheck_tools import (
+    ToolRunError,
     dedupe_findings,
     discover_sources,
     evaluate_gate,
@@ -62,6 +63,16 @@ def build_error_result(action: str, code: str, message: str, context: dict, timi
         error={"code": code, "message": message},
         timing=timing,
     )
+
+
+def load_effective_local_config(explicit_path: str | None) -> dict:
+    """--config 显式指定的文件直接读取；未指定时才读取 skill 目录下的 config.json。"""
+    if explicit_path:
+        path = Path(str(explicit_path)).expanduser()
+        if not path.is_file():
+            raise ConfigError(f"配置文件不存在：{path}")
+        return load_json_file(path)
+    return load_local_config(__file__)
 
 
 def print_findings(result: dict) -> None:
@@ -133,7 +144,7 @@ def main() -> int:
         return make_timing(started_at, (time.time() - started_ts) * 1000)
 
     try:
-        local_config = load_local_config(args.config or __file__)
+        local_config = load_effective_local_config(args.config)
         project_config = load_project_config(str(workspace))
     except ConfigError as exc:
         result = build_error_result(
@@ -150,6 +161,25 @@ def main() -> int:
         return 1
 
     parameter_sources: dict[str, str] = {}
+
+    def fail_tool(message: str) -> int:
+        result = build_error_result(
+            args.action,
+            "tool_failed",
+            message,
+            parameter_context(
+                provider="codecheck",
+                workspace=str(workspace),
+                parameter_sources=parameter_sources,
+                config_path=config_path,
+            ),
+            timing(),
+        )
+        if args.as_json:
+            output_json(result)
+        else:
+            print(f"错误: {message}", file=sys.stderr)
+        return 1
 
     if args.action == "rules":
         try:
@@ -312,7 +342,10 @@ def main() -> int:
             style_file = str((workspace / ".clang-format").resolve())
         if style_file and not Path(style_file).is_file():
             notes.append(f"格式配置文件不存在，clang-format 将使用默认风格：{style_file}")
-        format_results, format_notes = format_findings(files, clang_format, style_file, workspace, timeout_seconds)
+        try:
+            format_results, format_notes = format_findings(files, clang_format, style_file, workspace, timeout_seconds)
+        except ToolRunError as exc:
+            return fail_tool(str(exc))
         findings.extend(format_results)
         notes.extend(format_notes)
 
@@ -380,16 +413,19 @@ def main() -> int:
             configured_defines = project_config.get("defines")
             defines = configured_defines if isinstance(configured_defines, list) else []
 
-        tidy_results, tidy_notes = tidy_findings(
-            files,
-            clang_tidy,
-            tidy_config_file=tidy_config_file,
-            compile_db=compile_db,
-            include_dirs=[str(item) for item in include_dirs],
-            defines=[str(item) for item in defines],
-            workspace=workspace,
-            timeout=timeout_seconds,
-        )
+        try:
+            tidy_results, tidy_notes = tidy_findings(
+                files,
+                clang_tidy,
+                tidy_config_file=tidy_config_file,
+                compile_db=compile_db,
+                include_dirs=[str(item) for item in include_dirs],
+                defines=[str(item) for item in defines],
+                workspace=workspace,
+                timeout=timeout_seconds,
+            )
+        except ToolRunError as exc:
+            return fail_tool(str(exc))
         findings.extend(tidy_results)
         notes.extend(tidy_notes)
 

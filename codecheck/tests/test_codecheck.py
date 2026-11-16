@@ -1,5 +1,8 @@
 """codecheck 单测：不依赖本机 clang 工具链，工具调用通过 mock 注入。"""
 
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -9,6 +12,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import codecheck  # noqa: E402
 import codecheck_runtime  # noqa: E402
 import codecheck_tools  # noqa: E402
 
@@ -71,6 +75,131 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(findings[0]["rule"], "clang-format")
         self.assertEqual(findings[0]["file"], "bad.c")
         self.assertEqual(notes, [])
+
+
+class ToolFailureTests(unittest.TestCase):
+    """工具不可用/超时不能返回空 findings，否则门禁会 fail-open。"""
+
+    def test_format_launch_failure_raises(self):
+        workspace = Path(tempfile.mkdtemp())
+        source = workspace / "a.c"
+        source.write_text("int a;\n", encoding="utf-8")
+        with mock.patch.object(codecheck_tools, "run_process", side_effect=OSError("cannot execute")):
+            with self.assertRaises(codecheck_tools.ToolRunError):
+                codecheck_tools.format_findings([source], "clang-format", "", workspace, 10)
+
+    def test_format_timeout_raises(self):
+        workspace = Path(tempfile.mkdtemp())
+        source = workspace / "a.c"
+        source.write_text("int a;\n", encoding="utf-8")
+        with mock.patch.object(
+            codecheck_tools,
+            "run_process",
+            side_effect=codecheck_tools.subprocess.TimeoutExpired("clang-format", 1),
+        ):
+            with self.assertRaises(codecheck_tools.ToolRunError):
+                codecheck_tools.format_findings([source], "clang-format", "", workspace, 10)
+
+    def test_tidy_launch_failure_raises(self):
+        workspace = Path(tempfile.mkdtemp())
+        source = workspace / "a.c"
+        source.write_text("int a;\n", encoding="utf-8")
+        with mock.patch.object(codecheck_tools, "run_process", side_effect=OSError("cannot execute")):
+            with self.assertRaises(codecheck_tools.ToolRunError):
+                codecheck_tools.tidy_findings(
+                    [source],
+                    "clang-tidy",
+                    tidy_config_file="",
+                    compile_db="",
+                    include_dirs=[],
+                    defines=[],
+                    workspace=workspace,
+                    timeout=10,
+                )
+
+    def test_tidy_abnormal_exit_without_findings_raises(self):
+        workspace = Path(tempfile.mkdtemp())
+        source = workspace / "a.c"
+        source.write_text("int a;\n", encoding="utf-8")
+
+        def fake_run(command, timeout):
+            return codecheck_tools.subprocess.CompletedProcess(command, 2, "", "fatal error")
+
+        with mock.patch.object(codecheck_tools, "run_process", side_effect=fake_run):
+            with self.assertRaises(codecheck_tools.ToolRunError):
+                codecheck_tools.tidy_findings(
+                    [source],
+                    "clang-tidy",
+                    tidy_config_file="",
+                    compile_db="",
+                    include_dirs=[],
+                    defines=[],
+                    workspace=workspace,
+                    timeout=10,
+                )
+
+
+class TidyCommandTests(unittest.TestCase):
+    def test_relative_include_dirs_resolve_against_workspace(self):
+        workspace = Path(tempfile.mkdtemp())
+        source = workspace / "a.c"
+        source.write_text("int a;\n", encoding="utf-8")
+        captured = {}
+
+        def fake_run(command, timeout):
+            captured["command"] = command
+            return codecheck_tools.subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(codecheck_tools, "run_process", side_effect=fake_run):
+            codecheck_tools.tidy_findings(
+                [source],
+                "clang-tidy",
+                tidy_config_file="",
+                compile_db="",
+                include_dirs=["APP"],
+                defines=["USE_HAL_DRIVER"],
+                workspace=workspace,
+                timeout=10,
+            )
+        self.assertIn(f"-I{(workspace / 'APP').resolve()}", captured["command"])
+        self.assertIn("-DUSE_HAL_DRIVER", captured["command"])
+
+
+class LocalConfigTests(unittest.TestCase):
+    def test_explicit_config_is_loaded_directly(self):
+        path = Path(tempfile.mkdtemp()) / "custom.json"
+        path.write_text('{"fail_on": "error", "timeout_seconds": 42}', encoding="utf-8")
+        config = codecheck.load_effective_local_config(str(path))
+        self.assertEqual(config["fail_on"], "error")
+        self.assertEqual(config["timeout_seconds"], 42)
+
+    def test_missing_explicit_config_raises(self):
+        missing = Path(tempfile.mkdtemp()) / "missing.json"
+        with self.assertRaises(codecheck_runtime.ConfigError):
+            codecheck.load_effective_local_config(str(missing))
+
+
+class MainToolFailureTests(unittest.TestCase):
+    def test_tool_failure_is_reported_as_error(self):
+        workspace = Path(tempfile.mkdtemp())
+        (workspace / "a.c").write_text("int a;\n", encoding="utf-8")
+        argv = [
+            "codecheck.py",
+            "format",
+            "--workspace",
+            str(workspace),
+            "--json",
+            "--clang-format-exe",
+            "missing-tool",
+        ]
+        buffer = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            codecheck_tools, "run_process", side_effect=OSError("cannot execute")
+        ), contextlib.redirect_stdout(buffer):
+            exit_code = codecheck.main()
+        self.assertEqual(exit_code, 1)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["error"]["code"], "tool_failed")
 
 
 class DiscoveryTests(unittest.TestCase):

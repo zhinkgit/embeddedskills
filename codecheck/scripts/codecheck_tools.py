@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -35,8 +36,16 @@ TIDY_LINE = re.compile(
 )
 
 
+class ToolRunError(RuntimeError):
+    """外部分析器无法启动/超时/异常退出：必须按失败处理，不能当作空结果放行。"""
+
+    def __init__(self, tool: str, message: str):
+        super().__init__(message)
+        self.tool = tool
+
+
 def run_process(command: list[str], timeout: int) -> subprocess.CompletedProcess:
-    """执行外部工具；超时抛 subprocess.TimeoutExpired，由调用方转成 notes。"""
+    """执行外部工具；超时抛 subprocess.TimeoutExpired，由调用方转成 ToolRunError。"""
     return subprocess.run(
         command,
         capture_output=True,
@@ -94,11 +103,26 @@ def discover_sources(
         if base.is_file():
             candidates = [base]
         elif base.is_dir():
-            candidates = [
-                path
-                for path in base.rglob("*")
-                if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
-            ]
+            candidates = []
+            for current, dirnames, filenames in os.walk(base):
+                current_path = Path(current)
+                kept_dirs: list[str] = []
+                for dirname in dirnames:
+                    child = (current_path / dirname).resolve()
+                    child_posix = child.as_posix().casefold()
+                    if dirname.casefold() in excluded_names:
+                        continue
+                    if any(
+                        child_posix == prefix or child_posix.startswith(prefix + "/")
+                        for prefix in excluded_prefixes
+                    ):
+                        continue
+                    kept_dirs.append(dirname)
+                dirnames[:] = kept_dirs
+                for filename in filenames:
+                    path = current_path / filename
+                    if path.suffix.lower() in SOURCE_SUFFIXES:
+                        candidates.append(path)
         else:
             notes.append(f"源根不存在，已跳过：{root}")
             continue
@@ -136,12 +160,10 @@ def format_findings(
         command = [clang_format, "--dry-run", "--Werror", style_arg, str(path)]
         try:
             process = run_process(command, timeout)
-        except subprocess.TimeoutExpired:
-            notes.append(f"clang-format 超时（{timeout}s）：{path.name}")
-            continue
+        except subprocess.TimeoutExpired as exc:
+            raise ToolRunError("clang-format", f"clang-format 超时（{timeout}s）：{path.name}") from exc
         except OSError as exc:
-            notes.append(f"clang-format 无法执行：{exc}")
-            break
+            raise ToolRunError("clang-format", f"clang-format 无法执行：{exc}") from exc
         if process.returncode == 0:
             continue
         output = (process.stderr or process.stdout or "").strip().splitlines()
@@ -232,7 +254,9 @@ def tidy_findings(
     else:
         compiler_args: list[str] = []
         for directory in include_dirs:
-            compiler_args.append(f"-I{directory}")
+            resolved_directory = resolve_workspace_path(str(directory), workspace)
+            if resolved_directory:
+                compiler_args.append(f"-I{resolved_directory}")
         for define in defines:
             compiler_args.append(f"-D{define}")
         if not compiler_args:
@@ -240,17 +264,15 @@ def tidy_findings(
         command.extend(["--", *compiler_args])
     try:
         process = run_process(command, timeout)
-    except subprocess.TimeoutExpired:
-        notes.append(f"clang-tidy 超时（{timeout}s）")
-        return [], notes
+    except subprocess.TimeoutExpired as exc:
+        raise ToolRunError("clang-tidy", f"clang-tidy 超时（{timeout}s）") from exc
     except OSError as exc:
-        notes.append(f"clang-tidy 无法执行：{exc}")
-        return [], notes
+        raise ToolRunError("clang-tidy", f"clang-tidy 无法执行：{exc}") from exc
     findings = parse_tidy_output(process.stdout or "", workspace)
     findings.extend(parse_tidy_output(process.stderr or "", workspace))
     if process.returncode != 0 and not findings:
         tail = ((process.stderr or process.stdout or "").strip().splitlines() or ["clang-tidy 执行失败"])[-1]
-        notes.append(tail)
+        raise ToolRunError("clang-tidy", f"clang-tidy 异常退出（exit {process.returncode}）：{tail}")
     return dedupe_findings(findings), notes
 
 

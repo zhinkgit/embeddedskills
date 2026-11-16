@@ -40,6 +40,8 @@ argument-hint: "[scan|format|tidy|check|rules] ..."
 }
 ```
 
+用 `--config <path>` 可显式指定环境级配置文件；未指定时读取 `skill/config.json`。
+
 ### 工程级配置 (`.embeddedskills/config.json`)
 
 ```json
@@ -165,7 +167,7 @@ python <skill-dir>/scripts/codecheck.py rules --json
 退出码：
 
 - `0`：检查完成且门禁通过
-- `1`：检查完成但门禁未通过（`error.code=standard_violations`），或参数/工具错误
+- `1`：检查完成但门禁未通过（`error.code=standard_violations`），或参数/工具错误（如 `tool_not_found` / `tool_failed` / `invalid_config`）
 - `130`：用户中断
 
 > 与部分既有 skill 不同，`--json` 模式不会把失败退出码改成 0;失败时退出码始终非 0。
@@ -173,7 +175,7 @@ python <skill-dir>/scripts/codecheck.py rules --json
 ## 规则
 
 - 默认只读，不修改源文件；确需格式化时由用户显式执行 `clang-format -i` 或后续版本提供 `--fix`。
-- 工具缺失、配置损坏、没有源文件都返回 `status=error`，不静默成功。
+- 工具缺失、配置损坏、分析器启动失败/超时、没有源文件都返回 `status=error`，不静默成功。
 - 检查范围默认排除 `LIB`、`CMSIS`、`portable` 等第三方/生成代码（可在工程配置中覆盖）。
 - findings 必须带 `file:line:column` 与 `rule`，便于 AI 定位与批量修复；单次最多返回 200 条，超出置 `truncated=true`。
 - 规范内容见 `references/coding-guide.md`，规则库见 `references/rules.json`（`rules` 子命令可直接读取）。
