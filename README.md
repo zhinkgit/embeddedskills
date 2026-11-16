@@ -34,27 +34,31 @@
 ```mermaid
 flowchart TD
     A["💬 需求沟通"] --> B["✍️ 代码生成与优化"]
-    B --> C["🔨 自动编译 keil build / gcc build"]
-    C -->|有错误| D["🤖 AI 读取编译错误"]
+    B --> C["📐 编码规范检查 codecheck check"]
+    C -->|有违规| D["🤖 AI 读取规范/编译错误"]
     D --> B
-    C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash / probe-rs flash"]
-    E --> F["🔬 自动调试验证"]
-    F -->|异常| G["🤖 AI 读取调试信息"]
-    G --> B
-    F -->|正常| H["✅ 提交最终代码"]
+    C -->|通过| E["🔨 自动编译 keil build / gcc build"]
+    E -->|有错误| D
+    E -->|通过| F["⚡ 自动烧录 openocd flash / jlink flash / probe-rs flash"]
+    F --> G["🔬 自动调试验证"]
+    G -->|异常| H["🤖 AI 读取调试信息"]
+    H --> B
+    G -->|正常| I["✅ 提交最终代码"]
 
     style A fill:#4CAF50,color:#fff
-    style H fill:#4CAF50,color:#fff
-    style C fill:#2196F3,color:#fff
+    style I fill:#4CAF50,color:#fff
+    style C fill:#9C27B0,color:#fff
     style E fill:#2196F3,color:#fff
-    style F fill:#FF9800,color:#fff
+    style F fill:#2196F3,color:#fff
+    style G fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
-    style G fill:#f44336,color:#fff
+    style H fill:#f44336,color:#fff
 ```
 
 | 环节 | 传统 AI 辅助 | AI + embeddedskills |
 |------|------------|-------------------|
 | 代码编写 | AI 生成 | AI 生成 |
+| 编码规范检查 | **人工 review / 无** | ✅ AI 调用 clang-format / clang-tidy |
 | 编译构建 | **人工操作** | ✅ AI 调用 Keil / GCC |
 | 烧录下载 | **人工操作** | ✅ AI 调用 J-Link / OpenOCD |
 | 调试验证 | **人工操作** | ✅ AI 断点 / 寄存器 / 内存 |
@@ -102,6 +106,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔨 构建 | **keil** | Keil MDK 工程扫描、Target 枚举、编译、重建、清理 | `scan` `targets` `build` `rebuild` `clean` `flash` |
 | 🔨 构建 | **gcc** | CMake 型 GCC 工程配置、编译、大小分析 | `scan` `presets` `configure` `build` `rebuild` `size` |
 | 🔨 构建 | **eide** | EIDE 工程扫描、配置枚举、构建和大小分析 | `scan` `configs` `build` `rebuild` `clean` `size` |
+| 📐 规范 | **codecheck** | 编码规范检查：格式、命名、MISRA/CERT 静态分析，内置规则库 | `scan` `format` `tidy` `check` `rules` |
 | 🔬 调试 | **jlink** | 烧录、读写内存/寄存器、RTT/SWO、GDB 调试 | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 调试 | **openocd** | 烧录、擦除、GDB/Telnet、Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
 | 🔬 调试 | **probe-rs** | 探针发现、烧录、复位、内存读写、GDB 调试、RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
@@ -110,7 +115,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔌 通信 | **net** | 抓包分析、连通性测试、端口扫描、流量统计 | `capture` `analyze` `ping` `scan` `stats` |
 | 🔌 通信 | **ssh** | SSH 配置、环境解析、只读探测、远程命令、上传下载、跳板机和端口转发 | `list` `find` `resolve` `show` `add` + exec/probe/transfer/tunnel |
 | 🔌 通信 | **terminal** | 串口、SSH、本地 Shell 双向交互会话 | `start` `send` `read` `attach` `stop` |
-| 🎯 编排 | **workflow** | 自动识别工程 → 选择工具链 → 串联全流程 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
+| 🎯 编排 | **workflow** | 自动识别工程 → 选择工具链 → 串联全流程 | `plan` `check` `build` `build-check` `build-check-flash` `build-flash` `build-debug` `observe` `diagnose` |
 
 > [!TIP]
 > `Keil / GCC` 与 `J-Link / OpenOCD / probe-rs` 可自由正交组合，六种搭配均可开箱即用。
@@ -156,7 +161,7 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 <details>
 <summary><b>① 封装命令行工具</b></summary>
 
-每个 Skill 是一组 Python 脚本，将底层工具（UV4.exe、cmake、JLink.exe、openocd、probe-rs、tshark 等）的命令行参数和交互流程转化为结构化子命令，AI 可以像调用函数一样调用这些工具。
+每个 Skill 是一组 Python 脚本，将底层工具（UV4.exe、cmake、JLink.exe、openocd、probe-rs、tshark、clang-format、clang-tidy 等）的命令行参数和交互流程转化为结构化子命令，AI 可以像调用函数一样调用这些工具。
 
 </details>
 
@@ -227,8 +232,9 @@ workspace/
 | net | Wireshark (tshark) · Npcap |
 | ssh | OpenSSH 客户端 (`ssh` / `scp` / `ssh-keygen`) |
 | terminal | pyserial（串口后端）· OpenSSH 客户端（SSH 后端） |
+| codecheck | clang-format · clang-tidy（可选 cppcheck / PC-Lint） |
 
-> 除 CAN、串口和 terminal 的串口后端外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
+> 除 CAN、串口、terminal 的串口后端和 codecheck 的外部工具外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
 
 > [!WARNING]
 > Windows 下若要让 `probe-rs` 驱动 `J-Link`，通常需要把驱动切到 `WinUSB`，这会影响 SEGGER 官方工具继续使用。若你仍依赖 J-Link 官方工具链，优先继续使用现有 `jlink` skill。
@@ -243,6 +249,7 @@ workspace/
 |---|:---:|
 | keil | ✅ 已完成测试 |
 | gcc | ✅ 已完成测试 |
+| codecheck | ✅ 已完成测试 |
 | platformio | 🔧 待支持 |
 | jlink | ✅ 已完成测试 |
 | openocd | ✅ 已完成测试 |

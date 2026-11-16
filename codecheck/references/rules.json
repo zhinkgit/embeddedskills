@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "description": "嵌入式 C 编码规范规则库（可解释层）。规则文本为摘要说明，标准条款以 MISRA C:2012 / CERT C 原文为准。",
+  "rules": [
+    {
+      "id": "CC-001",
+      "title": "禁止动态内存分配",
+      "severity": "error",
+      "category": "resource",
+      "standards": ["MISRA C:2012 Rule 21.3", "MISRA C:2012 Dir 4.1"],
+      "how_to_check": "clang-tidy: bugprone-*, cert-* / 人工评审 malloc/calloc/realloc/free",
+      "fix_hint": "改为静态数组、内存池或启动期一次性分配；确需动态分配时给出容量上界与失败路径",
+      "example_bad": "p = malloc(n);",
+      "example_good": "static uint8_t buffer[BUFFER_SIZE];"
+    },
+    {
+      "id": "CC-002",
+      "title": "必须检查有返回值的函数调用",
+      "severity": "error",
+      "category": "control-flow",
+      "standards": ["MISRA C:2012 Rule 17.7", "MISRA C:2012 Dir 4.7"],
+      "how_to_check": "clang-tidy: cert-err33-c / clang-analyzer-*",
+      "fix_hint": "对返回值做分支处理或显式 (void) 丢弃并注释原因；禁止裸调用后忽略错误",
+      "example_bad": "uart_send(buf, len);",
+      "example_good": "if (uart_send(buf, len) != UART_OK) { return ERR_UART; }"
+    },
+    {
+      "id": "CC-003",
+      "title": "禁止递归调用",
+      "severity": "warning",
+      "category": "resource",
+      "standards": ["MISRA C:2012 Rule 17.2"],
+      "how_to_check": "人工评审 / 调用图分析（工具不支持时由 AI 按函数名自调用检查）",
+      "fix_hint": "改为显式栈或迭代实现；确需递归时给出最大深度与栈占用分析",
+      "example_bad": "int walk(node_t *n) { return walk(n->next); }",
+      "example_good": "for (node_t *n = head; n; n = n->next) { ... }"
+    },
+    {
+      "id": "CC-004",
+      "title": "禁止 goto（单一统一错误出口除外）",
+      "severity": "warning",
+      "category": "control-flow",
+      "standards": ["MISRA C:2012 Rule 15.1-15.3（条款精神）", "项目规范"],
+      "how_to_check": "人工评审 / clang-tidy readability-*",
+      "fix_hint": "用 return + 清理函数替代；仅允许向函数末尾统一 cleanup 标签跳转，且不得跳过变量初始化",
+      "example_bad": "goto fail; goto fail;",
+      "example_good": "status = step2(); if (status != OK) { goto cleanup; }"
+    },
+    {
+      "id": "CC-005",
+      "title": "使用固定宽度整数类型",
+      "severity": "warning",
+      "category": "type",
+      "standards": ["MISRA C:2012 Dir 4.6", "CERT INT00-C"],
+      "how_to_check": "clang-tidy: cert-int* / 人工评审 int/long 的平台相关性",
+      "fix_hint": "协议、寄存器、持久化字段使用 stdint.h 的 int8_t/uint16_t 等；仅循环计数可使用 int",
+      "example_bad": "unsigned long counter;",
+      "example_good": "uint32_t counter;"
+    },
+    {
+      "id": "CC-006",
+      "title": "指针与整数之间不得隐式转换",
+      "severity": "error",
+      "category": "type",
+      "standards": ["MISRA C:2012 Rule 11.4/11.6/11.9", "CERT INT36-C"],
+      "how_to_check": "clang-tidy: bugprone-*, cert-int36-c / 编译器 -Wpointer-to-int-cast",
+      "fix_hint": "使用 uintptr_t 显式转换并限定用途；外设寄存器使用 volatile 指针而不是整数地址",
+      "example_bad": "uint32_t addr = (uint32_t)&reg;",
+      "example_good": "volatile uint32_t *reg = (volatile uint32_t *)REG_BASE;"
+    },
+    {
+      "id": "CC-007",
+      "title": "控制语句必须使用花括号",
+      "severity": "warning",
+      "category": "style",
+      "standards": ["MISRA C:2012 Rule 15.6", "项目规范"],
+      "how_to_check": "clang-tidy: readability-braces-around-statements / clang-format",
+      "fix_hint": "if/for/while/else 后一律加 { }，即使只有一行",
+      "example_bad": "if (err) return;",
+      "example_good": "if (err) {\n    return;\n}"
+    },
+    {
+      "id": "CC-008",
+      "title": "禁止魔法数字",
+      "severity": "warning",
+      "category": "readability",
+      "standards": ["项目规范", "MISRA C:2012 Dir 4.1（可读性）"],
+      "how_to_check": "clang-tidy: readability-magic-numbers（需项目显式开启）",
+      "fix_hint": "提取为具名常量或 enum，并在注释中给出单位/来源（寄存器位、超时、协议字段）",
+      "example_bad": "if (retry > 3) { delay(100); }",
+      "example_good": "if (retry > MAX_RETRY) { delay(RETRY_DELAY_MS); }"
+    },
+    {
+      "id": "CC-009",
+      "title": "命名遵循模块前缀与项目大小写风格",
+      "severity": "warning",
+      "category": "style",
+      "standards": ["项目规范"],
+      "how_to_check": "clang-tidy: readability-identifier-naming（需配置 CheckOptions）",
+      "fix_hint": "导出符号使用 <module>_ 前缀；静态函数小写下划线；类型 PascalCase 或项目既定风格",
+      "example_bad": "void Init(void);",
+      "example_good": "void order_init(void);"
+    },
+    {
+      "id": "CC-010",
+      "title": "volatile 仅用于硬件寄存器与并发可见变量",
+      "severity": "warning",
+      "category": "concurrency",
+      "standards": ["CERT DCL17-C（精神）", "项目规范"],
+      "how_to_check": "人工评审 / clang-analyzer-*",
+      "fix_hint": "ISR 与主循环共享的标志使用 volatile；普通变量禁止滥用 volatile 掩盖竞态，必要时配临界区",
+      "example_bad": "volatile uint32_t counter; /* 仅本地计数 */",
+      "example_good": "volatile uint8_t g_uart_rx_flag; /* ISR 置位，主循环清除 */"
+    },
+    {
+      "id": "CC-011",
+      "title": "头文件必须有 include guard 且不得使用保留标识符",
+      "severity": "warning",
+      "category": "preprocessor",
+      "standards": ["MISRA C:2012 Rule 21.1（保留标识符）", "CERT DCL37-C"],
+      "how_to_check": "clang-tidy: bugprone-reserved-identifier / clang-diagnostic",
+      "fix_hint": "使用 #ifndef ORDER_CONFIG_H / #define ORDER_CONFIG_H / #endif；避免 __ 开头或 _大写 形式",
+      "example_bad": "#define __ORDER_CONFIG_H",
+      "example_good": "#define ORDER_CONFIG_H"
+    },
+    {
+      "id": "CC-012",
+      "title": "单函数复杂度与长度受控",
+      "severity": "info",
+      "category": "maintainability",
+      "standards": ["项目规范", "MISRA C:2012 Dir 1.1（可维护性）"],
+      "how_to_check": "clang-tidy: readability-function-cognitive-complexity（需显式开启）",
+      "fix_hint": "单函数不超过 50 行、圈复杂度不超过 10；超限时按状态机/子步骤拆分并补单元测试",
+      "example_bad": "int main(void) { /* 200 行 */ }",
+      "example_good": "static int step_poll(void); static int step_report(void);"
+    },
+    {
+      "id": "CC-013",
+      "title": "禁止隐式窄化与有符号/无符号混用",
+      "severity": "error",
+      "category": "type",
+      "standards": ["MISRA C:2012 Rule 10.3/10.4", "CERT INT31-C"],
+      "how_to_check": "clang-tidy: bugprone-*, cert-int31-c / 编译器 -Wconversion",
+      "fix_hint": "显式转换并校验取值范围；循环变量与长度使用 size_t/uint32_t 统一类型",
+      "example_bad": "uint8_t v = (int)wide_value;",
+      "example_good": "if (wide_value > UINT8_MAX) { return ERR_RANGE; } uint8_t v = (uint8_t)wide_value;"
+    },
+    {
+      "id": "CC-014",
+      "title": "编译告警零容忍",
+      "severity": "error",
+      "category": "build",
+      "standards": ["MISRA C:2012 Dir 1.1（可维护性）", "项目规范"],
+      "how_to_check": "build 阶段解析编译器告警（keil/gcc/eide 已有 parse_log / _parse_build_output）",
+      "fix_hint": "新增告警视为失败；确认为工具误报时在构建配置中局部抑制并记录原因",
+      "example_bad": "warning: unused variable 'x'",
+      "example_good": "构建日志 warnings = 0"
+    }
+  ]
+}

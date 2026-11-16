@@ -75,8 +75,13 @@ def main() -> None:
     if discovery["eide_projects"]:
         build_candidates.append("eide")
 
+    check_candidates = []
+    if (ROOT_DIR / "codecheck" / "scripts" / "codecheck.py").is_file():
+        check_candidates.append("codecheck")
+
     # 从配置中读取 preferred 设置
     preferred = {
+        "check": workflow_config.get("preferred_check", "auto"),
         "build": workflow_config.get("preferred_build", "auto"),
         "flash": workflow_config.get("preferred_flash", "auto"),
         "debug": workflow_config.get("preferred_debug", "auto"),
@@ -89,6 +94,7 @@ def main() -> None:
         summary="workflow 规划已生成",
         details={
             "workspace": str(workspace),
+            "check_candidates": check_candidates,
             "build_candidates": build_candidates,
             "flash_candidates": ["jlink", "openocd", "probe-rs"],
             "debug_candidates": ["jlink", "openocd", "probe-rs"],
@@ -102,6 +108,7 @@ def main() -> None:
             "eide_projects": len(discovery["eide_projects"]),
         },
         state={
+            "last_check": get_state_entry(state, "last_check"),
             "last_build": get_state_entry(state, "last_build"),
             "last_flash": get_state_entry(state, "last_flash"),
             "last_debug": get_state_entry(state, "last_debug"),
@@ -118,7 +125,7 @@ def main() -> None:
         print(result["summary"])
         print(f"workspace: {workspace}")
         print(f"keil: {len(discovery['keil_projects'])}, gcc: {len(discovery['gcc_projects'])}, eide: {len(discovery['eide_projects'])}")
-        print(f"preferred: build={preferred['build']}, flash={preferred['flash']}, debug={preferred['debug']}, observe={preferred['observe']}")
+        print(f"preferred: check={preferred['check']}, build={preferred['build']}, flash={preferred['flash']}, debug={preferred['debug']}, observe={preferred['observe']}")
 
 
 if __name__ == "__main__":

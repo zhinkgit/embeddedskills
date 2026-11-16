@@ -4,6 +4,7 @@
 
 - 发现当前 workspace 中的 Keil / GCC / EIDE 工程
 - 选择构建、烧录、调试、观测后端
+- 通过 `codecheck` 执行编码规范检查，并在失败时阻止后续 build
 - 串联 `.embeddedskills/state.json`
 - 聚合底层脚本输出
 
@@ -16,7 +17,10 @@
 ```bash
 python workflow/scripts/workflow_plan.py --json
 python workflow/scripts/workflow_run.py plan --json
+python workflow/scripts/workflow_run.py check --json
 python workflow/scripts/workflow_run.py build --json
+python workflow/scripts/workflow_run.py build-check --json
+python workflow/scripts/workflow_run.py build-check-flash --json
 python workflow/scripts/workflow_run.py build-flash --json
 python workflow/scripts/workflow_run.py build-debug --json
 python workflow/scripts/workflow_run.py observe --json
@@ -34,6 +38,8 @@ workflow 不再维护独立的工程配置结构，所有工程参数统一从 `
 ```json
 {
   "workflow": {
+    "preferred_check": "auto",
+    "check_fail_on": "warning",
     "preferred_build": "auto",
     "preferred_flash": "auto",
     "preferred_debug": "auto",

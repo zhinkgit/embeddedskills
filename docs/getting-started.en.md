@@ -133,7 +133,13 @@ The Skill's `description` field defines trigger keywords. The AI automatically r
 | "Check serial output" | `serial` |
 | "Step through debugging" | `openocd` or `jlink` |
 | "Look at registers" | `openocd` or `jlink` |
+| "Check coding standards" | `codecheck` |
+| "Check standards then compile and flash" | `workflow` |
 | "One-click compile, flash, and debug" | `workflow` |
+
+> [!TIP]
+> If the project already has `.clang-format` / `.clang-tidy`, ask AI to run `codecheck check` before
+> building, or use `workflow build-check` to chain "standard check → build"; failures stop before build.
 
 <br>
 

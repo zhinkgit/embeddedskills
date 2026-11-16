@@ -133,7 +133,13 @@ Skill 的 `description` 字段定义了触发关键词，AI 会自动识别意�
 | "看看串口输出" | `serial` |
 | "单步调试一下" | `openocd` 或 `jlink` |
 | "看看寄存器" | `openocd` 或 `jlink` |
+| "检查一下代码规范" | `codecheck` |
+| "先查规范再编译烧录" | `workflow` |
 | "一键编译烧录调试" | `workflow` |
+
+> [!TIP]
+> 工程里已有 `.clang-format` / `.clang-tidy` 时，可以让 AI 在编译前先跑 `codecheck check`，或直接用
+> `workflow build-check` 把"规范检查 → 构建"串起来；检查不通过会停在 build 之前。
 
 <br>
 

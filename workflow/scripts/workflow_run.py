@@ -31,6 +31,52 @@ from workflow_runtime import (  # noqa: E402
 
 
 PYTHON_EXE = sys.executable
+CHECK_SCRIPT_RELATIVE = Path("codecheck") / "scripts" / "codecheck.py"
+CHECK_FAIL_ON_CHOICES = ("none", "warning", "error")
+
+
+def check_script_path() -> Path:
+    return ROOT_DIR / CHECK_SCRIPT_RELATIVE
+
+
+def select_check_fail_on(workflow_config: dict, cli_value: str | None) -> str | None:
+    """check 门禁等级：CLI > workflow.check_fail_on > codecheck 自身默认。"""
+    if cli_value:
+        return cli_value
+    value = workflow_config.get("check_fail_on")
+    if isinstance(value, str) and value in CHECK_FAIL_ON_CHOICES:
+        return value
+    return None
+
+
+def run_check(workspace: Path, full_config: dict, cli_fail_on: str | None) -> dict:
+    """调用 codecheck skill 的 check 子命令，返回其标准 JSON。"""
+    script = check_script_path()
+    if not script.is_file():
+        return {
+            "status": "error",
+            "action": "check",
+            "error": {
+                "code": "check_not_available",
+                "message": "未找到 codecheck skill，请先安装 codecheck 后再执行 workflow check",
+            },
+        }
+    workflow_config = full_config.get("workflow", {})
+    cmd = [PYTHON_EXE, str(script), "check", "--workspace", str(workspace), "--json"]
+    fail_on = select_check_fail_on(workflow_config, cli_fail_on)
+    if fail_on:
+        cmd.extend(["--fail-on", fail_on])
+    result = run_json(cmd, workspace)
+    if result.get("action") != "check":
+        return {
+            "status": "error",
+            "action": "check",
+            "error": {
+                "code": "invalid_check_result",
+                "message": (result.get("error") or {}).get("message", "codecheck 返回了无法识别的结果"),
+            },
+        }
+    return result
 
 
 def _with_backend(result: dict, backend: str) -> dict:
@@ -482,6 +528,13 @@ def diagnose(workspace: Path, full_config: dict, discovery: dict, state: dict) -
         hints.append("当前 workspace 未发现 Keil/GCC/EIDE 工程")
     if not get_state_entry(state, "last_build"):
         hints.append("尚未生成 last_build，后续 flash/debug 无法自动串联")
+    if not get_state_entry(state, "last_check"):
+        hints.append("尚未执行编码规范检查，建议在 build 前运行 workflow check 或 build-check")
+    else:
+        check_timestamp = get_state_entry(state, "last_check").get("timestamp", "")
+        build_timestamp = get_state_entry(state, "last_build").get("timestamp", "")
+        if check_timestamp and build_timestamp and check_timestamp < build_timestamp:
+            hints.append("最近一次编码检查早于最近一次构建，建议重新执行 workflow check")
     if workflow_config.get("preferred_build") == "auto" and sum(1 for k in ("keil", "gcc", "eide") if discovery[k]) > 1:
         hints.append("同时存在多个构建后端（Keil/GCC/EIDE），建议在 .embeddedskills/config.json 的 workflow 段固定 preferred_build")
     return {
@@ -492,6 +545,7 @@ def diagnose(workspace: Path, full_config: dict, discovery: dict, state: dict) -
             "workspace": str(workspace),
             "discovery": discovery,
             "state": {
+                "last_check": get_state_entry(state, "last_check"),
                 "last_build": get_state_entry(state, "last_build"),
                 "last_flash": get_state_entry(state, "last_flash"),
                 "last_debug": get_state_entry(state, "last_debug"),
@@ -504,9 +558,10 @@ def diagnose(workspace: Path, full_config: dict, discovery: dict, state: dict) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="workflow run")
-    parser.add_argument("action", choices=["plan", "build", "build-flash", "build-debug", "observe", "diagnose"])
+    parser.add_argument("action", choices=["plan", "check", "build", "build-check", "build-check-flash", "build-flash", "build-debug", "observe", "diagnose"])
     parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
     parser.add_argument("--config", default=None, help="workflow config.json 路径（已废弃，仅保留兼容性）")
+    parser.add_argument("--check-fail-on", choices=["none", "warning", "error"], default=None, help="编码规范检查门禁等级，默认读取 workflow.check_fail_on")
     parser.add_argument("--build-backend", choices=["auto", "keil", "gcc", "eide"], default=None)
     parser.add_argument("--flash-backend", choices=["auto", "jlink", "openocd", "probe-rs"], default=None)
     parser.add_argument("--debug-backend", choices=["auto", "jlink", "openocd", "probe-rs"], default=None)
@@ -550,6 +605,63 @@ def main() -> None:
         result = build_project(workspace, full_config, discovery, args.build_backend)
         if result.get("status") == "ok" and result.get("details", {}).get("backend"):
             used_backends["preferred_build"] = result["details"]["backend"]
+    elif args.action == "check":
+        result = run_check(workspace, full_config, args.check_fail_on)
+    elif args.action == "build-check":
+        check_result = run_check(workspace, full_config, args.check_fail_on)
+        if check_result.get("status") == "error":
+            result = {
+                "status": "error",
+                "action": "build-check",
+                "summary": check_result.get("summary") or "编码规范检查未通过",
+                "details": {"check": check_result},
+                "error": check_result.get("error") or {"code": "check_failed", "message": "编码规范检查未通过"},
+            }
+        else:
+            build_result = build_project(workspace, full_config, discovery, args.build_backend)
+            if build_result.get("status") == "ok" and build_result.get("details", {}).get("backend"):
+                used_backends["preferred_build"] = build_result["details"]["backend"]
+            result = {
+                "status": build_result.get("status", "error"),
+                "action": "build-check",
+                "summary": "build-check 完成" if build_result.get("status") == "ok" else build_result.get("error", {}).get("message", "build-check 失败"),
+                "details": {"check": check_result, "build": build_result},
+                "error": build_result.get("error"),
+            }
+    elif args.action == "build-check-flash":
+        check_result = run_check(workspace, full_config, args.check_fail_on)
+        if check_result.get("status") == "error":
+            result = {
+                "status": "error",
+                "action": "build-check-flash",
+                "summary": check_result.get("summary") or "编码规范检查未通过",
+                "details": {"check": check_result},
+                "error": check_result.get("error") or {"code": "check_failed", "message": "编码规范检查未通过"},
+            }
+        else:
+            build_result = build_project(workspace, full_config, discovery, args.build_backend)
+            if build_result.get("status") == "error":
+                result = {
+                    "status": "error",
+                    "action": "build-check-flash",
+                    "summary": build_result.get("error", {}).get("message", "build-check-flash 构建失败"),
+                    "details": {"check": check_result, "build": build_result},
+                    "error": build_result.get("error"),
+                }
+            else:
+                if build_result.get("details", {}).get("backend"):
+                    used_backends["preferred_build"] = build_result["details"]["backend"]
+                state = load_workspace_state(str(workspace))
+                flash_result = flash_project(workspace, full_config, state, args.flash_backend)
+                if flash_result.get("status") == "ok" and flash_result.get("details", {}).get("backend"):
+                    used_backends["preferred_flash"] = flash_result["details"]["backend"]
+                result = {
+                    "status": flash_result.get("status", "error"),
+                    "action": "build-check-flash",
+                    "summary": "build-check-flash 完成" if flash_result.get("status") == "ok" else flash_result.get("error", {}).get("message", "build-check-flash 失败"),
+                    "details": {"check": check_result, "build": build_result, "flash": flash_result},
+                    "error": flash_result.get("error"),
+                }
     elif args.action == "build-flash":
         build_result = build_project(workspace, full_config, discovery, args.build_backend)
         if build_result.get("status") == "error":
@@ -618,6 +730,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(wrapped)
+        if wrapped.get("error"):
+            sys.exit(1)
     else:
         print(f"[workflow {args.action}] {wrapped['summary']}")
         if wrapped.get("error"):
