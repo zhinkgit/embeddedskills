@@ -1,0 +1,7 @@
+{
+  "clang_format_exe": "",
+  "clang_tidy_exe": "",
+  "cppcheck_exe": "",
+  "timeout_seconds": 600,
+  "fail_on": "warning"
+}

@@ -34,27 +34,31 @@ Embedded development has a gap that pure software development doesn't have: writ
 ```mermaid
 flowchart TD
     A["💬 Requirements Discussion"] --> B["✍️ Code Generation & Optimization"]
-    B --> C["🔨 Auto Compile keil build / gcc build"]
-    C -->|Errors| D["🤖 AI Reads Compiler Errors"]
+    B --> C["📐 Code Standard Check codecheck check"]
+    C -->|Violations| D["🤖 AI Reads Standard/Build Errors"]
     D --> B
-    C -->|Success| E["⚡ Auto Flash openocd flash / jlink flash / probe-rs flash"]
-    E --> F["🔬 Auto Debug & Verify"]
-    F -->|Anomaly| G["🤖 AI Reads Debug Info"]
-    G --> B
-    F -->|Normal| H["✅ Submit Final Code"]
+    C -->|Pass| E["🔨 Auto Compile keil build / gcc build"]
+    E -->|Errors| D
+    E -->|Success| F["⚡ Auto Flash openocd flash / jlink flash / probe-rs flash"]
+    F --> G["🔬 Auto Debug & Verify"]
+    G -->|Anomaly| H["🤖 AI Reads Debug Info"]
+    H --> B
+    G -->|Normal| I["✅ Submit Final Code"]
 
     style A fill:#4CAF50,color:#fff
-    style H fill:#4CAF50,color:#fff
-    style C fill:#2196F3,color:#fff
+    style I fill:#4CAF50,color:#fff
+    style C fill:#9C27B0,color:#fff
     style E fill:#2196F3,color:#fff
-    style F fill:#FF9800,color:#fff
+    style F fill:#2196F3,color:#fff
+    style G fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
-    style G fill:#f44336,color:#fff
+    style H fill:#f44336,color:#fff
 ```
 
 | Stage | Traditional AI Assistance | AI + embeddedskills |
 |------|------------|-------------------|
 | Code Writing | AI generates | AI generates |
+| Code Standard Check | **Manual review / none** | ✅ AI invokes clang-format / clang-tidy |
 | Compile/Build | **Manual** | ✅ AI invokes Keil / GCC |
 | Flash/Download | **Manual** | ✅ AI invokes J-Link / OpenOCD |
 | Debug/Verify | **Manual** | ✅ AI breakpoints / registers / memory |
@@ -102,6 +106,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔨 Build | **keil** | Keil MDK project scan, Target enumeration, compile, rebuild, clean | `scan` `targets` `build` `rebuild` `clean` `flash` |
 | 🔨 Build | **gcc** | CMake-based GCC project configuration, compile, size analysis | `scan` `presets` `configure` `build` `rebuild` `size` |
 | 🔨 Build | **eide** | EIDE project scan, configuration discovery, build, and size analysis | `scan` `configs` `build` `rebuild` `clean` `size` |
+| 📐 Standard | **codecheck** | Coding-standard checks: format, naming, MISRA/CERT static analysis, built-in rule library | `scan` `format` `tidy` `check` `rules` |
 | 🔬 Debug | **jlink** | Flash, read/write memory/registers, RTT/SWO, GDB debug | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 Debug | **openocd** | Flash, erase, GDB/Telnet, Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
 | 🔬 Debug | **probe-rs** | Probe discovery, flashing, reset, memory access, GDB debug, RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
@@ -110,7 +115,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔌 Communication | **net** | Packet capture analysis, connectivity test, port scan, traffic stats | `capture` `analyze` `ping` `scan` `stats` |
 | 🔌 Communication | **ssh** | SSH config, environment resolution, read-only probes, remote commands, transfers, jump hosts, and tunnels | `list` `find` `resolve` `show` `add` + exec/probe/transfer/tunnel |
 | 🔌 Communication | **terminal** | Bidirectional serial, SSH, and local shell sessions | `start` `send` `read` `attach` `stop` |
-| 🎯 Orchestration | **workflow** | Auto-detect project → Select toolchain → Orchestrate full flow | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
+| 🎯 Orchestration | **workflow** | Auto-detect project → Select toolchain → Orchestrate full flow | `plan` `check` `build` `build-check` `build-check-flash` `build-flash` `build-debug` `observe` `diagnose` |
 
 > [!TIP]
 > `Keil / GCC` and `J-Link / OpenOCD / probe-rs` can be freely combined orthogonally — all six combinations work out of the box.
@@ -159,7 +164,7 @@ Three key designs enable true autonomous AI closed-loop:
 <details>
 <summary><b>① Wrap CLI Tools</b></summary>
 
-Each Skill is a set of Python scripts that convert underlying tools (UV4.exe, cmake, JLink.exe, openocd, probe-rs, tshark, etc.) CLI parameters and interactive flows into structured subcommands, allowing AI to call these tools like functions.
+Each Skill is a set of Python scripts that convert underlying tools (UV4.exe, cmake, JLink.exe, openocd, probe-rs, tshark, clang-format, clang-tidy, etc.) CLI parameters and interactive flows into structured subcommands, allowing AI to call these tools like functions.
 
 </details>
 
@@ -230,8 +235,9 @@ workspace/
 | net | Wireshark (tshark) · Npcap |
 | ssh | OpenSSH client (`ssh` / `scp` / `ssh-keygen`) |
 | terminal | pyserial for serial backend · OpenSSH client for SSH backend |
+| codecheck | clang-format · clang-tidy (optional cppcheck / PC-Lint) |
 
-> Except for CAN, serial, and terminal's serial backend, all Skills are implemented using Python standard library — no additional Python dependencies needed.
+> Except for CAN, serial, terminal's serial backend, and codecheck's external tools, all Skills are implemented using Python standard library — no additional Python dependencies needed.
 
 > [!WARNING]
 > On Windows, using `probe-rs` with `J-Link` typically requires switching the probe driver to `WinUSB`, which can break the official SEGGER tooling. If you still rely on the SEGGER toolchain, prefer the existing `jlink` skill.
@@ -246,6 +252,7 @@ workspace/
 |---|:---:|
 | keil | ✅ Tested |
 | gcc | ✅ Tested |
+| codecheck | ✅ Tested |
 | platformio | 🔧 To be supported |
 | jlink | ✅ Tested |
 | openocd | ✅ Tested |

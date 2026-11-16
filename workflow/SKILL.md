@@ -1,17 +1,18 @@
 ---
 name: workflow
 description: >-
-  embeddedskills 的薄编排层，用于在当前 workspace 中发现工程、选择 build/flash/debug/observe
+  embeddedskills 的薄编排层，用于在当前 workspace 中发现工程、选择 check/build/flash/debug/observe
   后端、串联 .embeddedskills/state.json，并聚合底层 skill 的结果。
-  当用户明确输入以下命令之一："一键构建烧录"、"自动诊断"、"串起 build -> flash -> debug -> observe" 或显式调用 /workflow 时触发。
-argument-hint: "[plan|build|build-flash|build-debug|observe|diagnose] ..."
+  当用户明确输入以下命令之一："一键构建烧录"、"自动诊断"、"先做编码规范检查再构建"、
+  "串起 check -> build -> flash -> debug -> observe" 或显式调用 /workflow 时触发。
+argument-hint: "[plan|check|build|build-check|build-check-flash|build-flash|build-debug|observe|diagnose] ..."
 ---
 
 # Workflow 编排层
 
 本 skill 不重复实现底层逻辑，只做发现、选择、串联和聚合。
 
-支持 **Keil** / **GCC** / **EIDE** 三种构建后端，以及 **jlink** / **openocd** / **probe-rs** 三种 flash/debug/observe 后端。
+支持 **Keil** / **GCC** / **EIDE** 三种构建后端，以及 **jlink** / **openocd** / **probe-rs** 三种 flash/debug/observe 后端；`check` 阶段通过 **codecheck** skill 做编码规范检查。
 
 `observe` 阶段当前会给出 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm`、`probe-rs:rtt` 这几类候选观测后端。
 
@@ -20,7 +21,10 @@ argument-hint: "[plan|build|build-flash|build-debug|observe|diagnose] ..."
 ```bash
 python <skill-dir>/scripts/workflow_plan.py --json
 python <skill-dir>/scripts/workflow_run.py plan --json
+python <skill-dir>/scripts/workflow_run.py check --json
 python <skill-dir>/scripts/workflow_run.py build --json
+python <skill-dir>/scripts/workflow_run.py build-check --json
+python <skill-dir>/scripts/workflow_run.py build-check-flash --json
 python <skill-dir>/scripts/workflow_run.py build-flash --json
 python <skill-dir>/scripts/workflow_run.py build-debug --json
 python <skill-dir>/scripts/workflow_run.py observe --json
@@ -38,6 +42,8 @@ workflow 不再维护独立的工程配置结构，所有工程参数统一从 `
 ```json
 {
   "workflow": {
+    "preferred_check": "auto",
+    "check_fail_on": "warning",
     "preferred_build": "auto",
     "preferred_flash": "auto",
     "preferred_debug": "auto",
@@ -45,6 +51,8 @@ workflow 不再维护独立的工程配置结构，所有工程参数统一从 `
   }
 }
 ```
+
+`check_fail_on` 控制编码规范门禁等级（`none` / `warning` / `error`），也可用 `--check-fail-on` 临时覆盖；存量工程建议先用 `error` 并配合 codecheck baseline 逐步收紧。
 
 workflow 通过读取 `.embeddedskills/config.json` 中其他 skill 的配置段来获取工程参数（如 `keil.project`、`eide.project`、`eide.config`、`jlink.device`、`probe-rs.chip` 等）。
 
@@ -73,7 +81,8 @@ workflow 通过读取 `.embeddedskills/config.json` 中其他 skill 的配置段
 ## 规则
 
 - 发现多个工程或多个候选后端时，只返回候选列表，不自动猜测
-- 构建、烧录、调试、观测之间优先通过 `.embeddedskills/state.json` 串联
+- `check` / `build-check` / `build-check-flash` 在编码规范检查失败时立即停止，不进入 build；`--check-fail-on none` 可显式跳过门禁
+- 构建、烧录、调试、观测之间优先通过 `.embeddedskills/state.json` 串联，`check` 阶段写入 `last_check`
 - `observe` 只生成推荐命令，不在 workflow 内直接长时间占用观测通道
 - 失败时优先返回哪个阶段失败，以及底层脚本的结构化错误
 - workflow 与其他 Skill 的协同只通过 `.embeddedskills/config.json`、`.embeddedskills/state.json` 和子进程调用底层 Skill
