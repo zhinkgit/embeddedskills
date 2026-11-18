@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import queue
 import subprocess
@@ -16,10 +15,6 @@ import threading
 import time
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from jlink_runtime import (  # noqa: E402
     default_config_path,
@@ -37,6 +32,8 @@ from jlink_runtime import (  # noqa: E402
     parameter_context,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -76,7 +73,7 @@ def _auto_viewer_cmd(config: dict, project_config: dict, state: dict) -> list[st
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="J-Link SWO 输出捕获")
+    parser = ArgumentParser(description="J-Link SWO 输出捕获")
     parser.add_argument("--viewer-cmd", nargs="+", default=None, help="完整 SWO 采集命令，例如 JLinkSWOViewerCL 的调用参数")
     parser.add_argument("--duration", type=float, default=0, help="采集时长(秒)，0=持续运行")
     parser.add_argument("--workspace", default=None, help="workspace 根目录，默认当前目录")
@@ -106,7 +103,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
@@ -163,7 +160,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
@@ -190,4 +187,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

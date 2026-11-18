@@ -13,6 +13,10 @@ argument-hint: "[info|flash|read-mem|write-mem|regs|reset|halt|go|step|run-to|rt
 
 本 skill 提供 J-Link 探针的设备探测、固件烧录、内存读写、寄存器查看、目标复位、RTT 日志读取，以及轻量在线调试和 GDB 源码级调试能力。
 
+## 运行依赖
+
+Python 3.10+ 和对应系统的 SEGGER J-Link 工具。GDB 调试、RTT、SWO 按子命令准备对应程序与探针。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -59,7 +63,7 @@ skill 目录下的 `config.json` 包含环境级配置（工具路径、端口�
 - `interface`：调试接口，SWD 或 JTAG，默认 SWD
 - `speed`：调试速率 kHz，默认 4000
 
-参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 
 成功执行后，确认过的 device/interface/speed 会自动写回工程配置。
 
@@ -99,8 +103,8 @@ skill 目录下的 `config.json` 包含环境级配置（工具路径、端口�
 
 1. 读取 `skill/config.json`，确认 `exe` 路径有效
 2. 读取 `.embeddedskills/config.json` 获取工程级配置（device/interface/speed）
-3. 读取 `.embeddedskills/state.json` 获取历史状态
-4. 参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+3. 读取 `.embeddedskills/state/jlink.json` 获取历史状态
+4. 工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 5. 若当前动作需要 `device` 且仍为空，直接要求用户补充，绝不猜测
 6. 多探针场景未指定 `serial_no` 时，列出探针让用户选择，不自动选择
 7. 按 `operation_mode` 决定是否需要确认后执行
@@ -249,14 +253,14 @@ run-to 示例（断点命中）：
 
 - 不自动猜测 `device` 芯片型号，缺失时必须询问用户
 - 多探针场景不自动选择探针，必须让用户指定序列号
-- 参数解析优先级为：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+- 工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 - `.bin` 文件必须显式提供烧录地址，缺失时报错
 - 连接失败时给出排查建议（检查连线、供电、接口类型、速度），不自动尝试更激进参数
 - 烧录、写内存、复位在参数完整且用户意图明确时直接执行
 - `run-to` 的断点在单次 JLink 会话内完成设置和清除，不存在跨会话 handle 问题
 - 结果回显中始终包含目标芯片、接口类型和执行动作
-- 产物路径（elf/file）不进入工程配置，仍只依赖 `state.json`
-- `last_flash`/`last_debug` 等运行状态继续写入 `state.json`
+- 可通过 CLI 或本 Skill 的工程配置指定固件和 ELF 路径
+- `last_flash`/`last_debug` 等运行状态继续写入 `.embeddedskills/state/jlink.json`
 
 ## 调试典型工作流
 

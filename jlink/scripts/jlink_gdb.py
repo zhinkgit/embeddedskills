@@ -12,10 +12,6 @@ import time
 from pathlib import Path
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from jlink_gdb_common import build_gdb_commands, parse_gdb_output, run_gdb_commands  # noqa: E402
 from jlink_runtime import (  # noqa: E402
     build_artifacts,
@@ -37,6 +33,8 @@ from jlink_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -153,7 +151,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="J-Link GDB Server 调试")
+    parser = ArgumentParser(description="J-Link GDB Server 调试")
     sub = parser.add_subparsers(dest="command")
     for name in ALL_COMMANDS:
         sub_parser = sub.add_parser(name, help=f"GDB {name}")
@@ -168,14 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _state_lookup(state: dict) -> dict:
-    last_build = get_state_entry(state, "last_build")
     last_flash = get_state_entry(state, "last_flash")
     last_debug = get_state_entry(state, "last_debug")
-    artifacts = last_build.get("artifacts", {})
     return {
+        "debug_file": last_debug.get("debug_file") or (last_debug.get("artifacts") or {}).get("debug_file"),
         "device": last_debug.get("device") or last_flash.get("device"),
-        "elf_file": last_build.get("debug_file") or last_build.get("elf_file") or artifacts.get("debug_file"),
-        "debug_file": last_build.get("debug_file") or artifacts.get("debug_file"),
         "serial_no": last_debug.get("serial_no") or last_flash.get("serial_no"),
         "interface": last_debug.get("interface") or last_flash.get("interface"),
         "speed": last_debug.get("speed") or last_flash.get("speed"),
@@ -307,8 +302,8 @@ def main() -> None:
         elf_file, parameter_sources["elf"] = resolve_param(
             "elf",
             args.elf,
-            config=config,
-            config_keys=["default_elf"],
+            config=project_config,
+            config_keys=["elf", "elf_file", "debug_file"],
             state_record=state_lookup,
             state_keys=["elf_file", "debug_file"],
             normalize_as_path=True,
@@ -571,4 +566,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

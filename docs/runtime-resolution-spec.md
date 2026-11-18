@@ -6,24 +6,14 @@
 
 目标：
 
-- 统一 `CLI / skill/config.json / .embeddedskills/config.json / .embeddedskills/state.json / 系统 PATH` 的职责和优先级
+- 统一 `CLI / skill/config.json / .embeddedskills/config.json / .embeddedskills/state/<skill>.json / 系统 PATH` 的职责和优先级
 - 明确哪些参数允许从哪些层读取
 - 要求脚本主动探测系统 `PATH`，而不是仅依赖命令执行失败后的被动报错
 - 统一参数来源回显、自动写回和缺失参数处理
 
 ## 适用范围
 
-适用于以下 skill：
-
-- `can`
-- `serial`
-- `net`
-- `gcc`
-- `keil`
-- `jlink`
-- `openocd`
-- `probe-rs`
-- `workflow`
+每个 Skill 包独立运行，通过本包脚本路径定位资源，并声明其 Python 库、外部程序和支持平台。工具之间可传递显式的固件、ELF 或日志文件路径。工程配置按 Skill 名称分区，运行历史分别存放于工作区的 .embeddedskills/state/<skill>.json。
 
 ## 文件职责
 
@@ -55,7 +45,6 @@
 
 - 工程路径、Target、preset
 - 芯片型号、接口类型、协议类型
-- `workflow.preferred_*`
 - 共享日志目录
 
 不应存放：
@@ -63,7 +52,7 @@
 - 机器相关的绝对工具路径
 - 依赖当前 Windows 用户目录的路径
 
-### 4. `<workspace>/.embeddedskills/state.json`
+### 4. `<workspace>/.embeddedskills/state/<skill>.json`
 
 运行状态，不是配置真值源，只作为最近一次成功执行的回退来源。
 
@@ -118,7 +107,7 @@
 规则：
 
 - 不从 `.embeddedskills/config.json` 读取工具绝对路径
-- 不从 `state.json` 回退工具路径
+- 不从 `本 Skill 的状态文件` 回退工具路径
 - 若 `PATH` 命中多个候选，优先使用 `shutil.which()` 返回的首个结果
 
 ### B. 工程/硬件配置参数
@@ -142,7 +131,7 @@
 
 1. CLI 显式参数
 2. `.embeddedskills/config.json`
-3. `.embeddedskills/state.json`
+3. `.embeddedskills/state/<skill>.json`
 4. 自动发现
 5. 内建默认值
 6. 询问用户或报错
@@ -150,7 +139,7 @@
 规则：
 
 - 不从 `skill/config.json` 读取这类工程真值参数
-- `state.json` 仅作为最近一次成功结果的回退
+- `本 Skill 的状态文件` 仅作为最近一次成功结果的回退
 - 自动发现只能用于“可枚举且歧义可控”的参数，如单一工程、单一串口、单一 CAN 接口
 
 ### C. 产物/输入文件路径参数
@@ -166,13 +155,13 @@
 
 1. CLI 显式参数
 2. `.embeddedskills/config.json`
-3. `.embeddedskills/state.json`
+3. `.embeddedskills/state/<skill>.json`
 4. 工作区搜索
 5. 报错
 
 规则：
 
-- 允许从 `state.json` 回退上次成功构建产物
+- 允许从 `本 Skill 的状态文件` 回退上次成功构建产物
 - 工作区搜索必须可解释，优先搜索最近一次构建目录或约定目录，不允许无界递归猜测
 
 ### D. 运行时端口/日志/观测参数
@@ -190,29 +179,13 @@
 1. CLI 显式参数
 2. `.embeddedskills/config.json`
 3. `skill/config.json`
-4. `.embeddedskills/state.json`
+4. `.embeddedskills/state/<skill>.json`
 5. 内建默认值
 
 规则：
 
 - `log_dir` 属于工程级优先参数，优先取工程配置
 - 端口类参数允许环境级提供机器默认值
-
-### E. workflow 兼容覆盖文件
-
-仅 `workflow` 保留 `--config` 兼容入口。
-
-优先级：
-
-1. CLI 显式参数
-2. `--config` 指向的兼容配置文件
-3. `.embeddedskills/config.json`
-4. 自动发现
-5. 报错
-
-说明：
-
-- 该层仅用于兼容旧用法，不作为其他 skill 的通用机制
 
 ## 系统 PATH 主动探测规范
 
@@ -254,9 +227,8 @@
 
 - 单一候选自动发现成功后的工程参数
 - 用户执行成功后确认有效的 `device/chip/interface/target/preset/project`
-- `workflow.preferred_*`
 
-### 写回 `.embeddedskills/state.json`
+### 写回 `.embeddedskills/state/<skill>.json`
 
 写回最近一次成功运行记录：
 
@@ -316,18 +288,12 @@
 - `artifact_path`
 - `runtime_option`
 
-## 与当前仓库的差异
+## 机器输出
 
-本规范生效后，以下行为需要统一修正：
-
-- `can / serial / net` 的 helper 文档与实际调用不一致
-- `jlink` 和 `openocd` 的 `SKILL.md` 前后存在两套优先级描述
-- `openocd_telnet.py` 需要与其他 `openocd_*` 脚本对齐
-- `probe-rs` 文档需要补充 `PATH` 主动探测层
-- `README.md` 与 `docs/getting-started.md` 的“三层配置”描述需要升级为包含 `PATH` 的统一模型
+可自动化命令使用 --json，将 UTF-8 JSON 写入 stdout，包含 status、action、summary、details。错误附带 error.code 和 error.message，退出码非零。持续数据使用 JSON Lines，每条记录包含 timestamp 和 event。
 
 ## 统一对外表述
 
 面向用户时，推荐统一表述为：
 
-> 参数优先级按参数类型解析。工程参数优先读取 CLI 和 `.embeddedskills/config.json`，工具路径优先读取 CLI、`skill/config.json` 和系统 `PATH`，运行历史只作为 `state.json` 回退来源。
+> 参数优先级按参数类型解析。工程参数优先读取 CLI 和 `.embeddedskills/config.json`，工具路径优先读取 CLI、`skill/config.json` 和系统 `PATH`，运行历史只作为 `本 Skill 的状态文件` 回退来源。

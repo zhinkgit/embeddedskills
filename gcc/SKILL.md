@@ -15,6 +15,10 @@ argument-hint: "[scan|presets|configure|build|rebuild|clean|size] ..."
 
 范围说明：当前仅支持 **CMake 型** GCC 嵌入式工程，不覆盖纯 `Makefile` 工程。
 
+## 运行依赖
+
+Windows 或 Linux，Python 3.10+、CMake、工程的生成器与 ARM GCC 工具链。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -57,12 +61,13 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 
 参数解析顺序（从高到低）：
 1. CLI 显式参数
-2. 环境级配置（skill/config.json）
-3. 工程级配置（.embeddedskills/config.json）
-4. state.json（上次构建记录）
-5. 搜索/询问
+2. 工程级配置（.embeddedskills/config.json）
+3. .embeddedskills/state/gcc.json（上次构建记录）
+4. 搜索/询问
 
-冲突解决规则：同一参数存在多个来源时，以序号最小的来源为准；高序号来源仅在低序号来源未提供该参数时生效。例如：CLI 已指定 `--preset Debug`，则忽略 state.json 中记录的上次 preset。
+工具路径依次读取 CLI、本机配置和 PATH。
+
+冲突解决规则：同一参数存在多个来源时，以序号最小的来源为准；高序号来源仅在低序号来源未提供该参数时生效。例如：CLI 已指定 `--preset Debug`，则忽略 .embeddedskills/state/gcc.json 中记录的上次 preset。
 
 ## 子命令
 
@@ -159,7 +164,7 @@ python <skill-dir>/scripts/gcc_size.py compare \
 - 不修改 CMakeLists.txt 或任何 CMake 配置文件
 - 当前 skill 仅覆盖 CMake 型 GCC 工程，不对纯 Makefile 工程做识别和构建
 - 不自动猜测工程路径或 preset，有歧义时必须询问用户
-- 参数解析优先级为：CLI 显式参数 > 环境级配置 > 工程级配置 > `.embeddedskills/state.json` > 搜索/询问
+- 参数解析优先级为：工程参数：CLI 显式参数 > 工程级配置 > `.embeddedskills/state/gcc.json` > 搜索/询问
 - `clean` 不在自动流程中隐式执行
 - 构建失败时优先展示首个错误和日志文件路径
 - 结果回显中始终包含工程名、preset 名、构建目录路径；构建成功时优先回显 `elf_file`

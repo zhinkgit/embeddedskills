@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from keil_runtime import (  # noqa: E402
     build_artifacts,
@@ -36,6 +32,8 @@ from keil_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -418,7 +416,7 @@ def check_last_build_ok(log_dir: str, project: str, target: str) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Keil MDK 构建/重建/清理/烧录")
+    parser = ArgumentParser(description="Keil MDK 构建/重建/清理/烧录")
     parser.add_argument("action", choices=["build", "rebuild", "clean", "flash"])
     parser.add_argument("--uv4", default=None, help="UV4.exe 路径")
     parser.add_argument("--project", default=None, help="工程文件路径")
@@ -442,23 +440,25 @@ def main() -> None:
 
     parameter_sources: dict[str, str] = {}
     try:
-        # uv4_exe: CLI > 环境级配置 > 必需
+        # uv4_exe: CLI > 环境级配置 > PATH
         uv4_exe, parameter_sources["uv4"] = resolve_param(
             "uv4",
             args.uv4,
             config=local_config,
             config_keys=["uv4_exe"],
-            required=True,
-            normalize_as_path=True,
-            workspace=str(workspace),
         )
         
-        # project: CLI > 环境级配置 > 工程级配置 > state.json > 必需
+        candidate = uv4_exe or "UV4"
+        uv4_exe = shutil.which(candidate)
+        if not uv4_exe:
+            raise ValueError(f"找不到 Keil 可执行文件：{candidate}")
+        if not parameter_sources["uv4"]:
+            parameter_sources["uv4"] = "path:UV4"
+
+        # project: CLI > 工程级配置 > 本技能状态文件 > 必需
         project, parameter_sources["project"] = resolve_param(
             "project",
             args.project,
-            config=local_config,
-            config_keys=["default_project"],
             normalize_as_path=True,
             workspace=str(workspace),
         )
@@ -473,12 +473,10 @@ def main() -> None:
         if is_missing(project):
             raise ValueError("缺少必要参数: project")
         
-        # target: CLI > 环境级配置 > 工程级配置 > state.json
+        # target: CLI > 工程级配置 > 本技能状态文件
         target, parameter_sources["target"] = resolve_param(
             "target",
             args.target,
-            config=local_config,
-            config_keys=["default_target"],
         )
         # 工程级配置（优先于 state）
         if is_missing(target) and not is_missing(project_config.get("target")):
@@ -640,6 +638,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
         return
 
     if result["status"] == "ok":
@@ -659,4 +659,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

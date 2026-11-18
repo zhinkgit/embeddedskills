@@ -1,7 +1,5 @@
 """串口数据发送"""
 
-import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -11,15 +9,12 @@ from serial_runtime import (
     open_serial_port,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
-
-
-def output_json(obj):
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
 
 
 def error_exit(code, message, use_json):
@@ -50,7 +45,7 @@ def build_payload(data, hex_mode, line_ending):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="串口数据发送")
+    parser = ArgumentParser(description="串口数据发送")
     parser.add_argument("data", help="要发送的数据")
     parser.add_argument("--port", help="串口号 (如 COM3)")
     parser.add_argument("--baudrate", type=int, help="波特率")
@@ -170,4 +165,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

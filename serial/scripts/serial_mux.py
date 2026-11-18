@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import shutil
 import signal
@@ -16,11 +15,14 @@ from pathlib import Path
 from serial_runtime import (
     get_serial_config,
     load_workspace_state,
-    save_workspace_state,
+    update_state_entry,
+    drop_mux_state,
     save_project_config,
     is_missing,
     make_result,
     output_json,
+    ArgumentParser,
+    run_cli,
 )
 
 DEFAULT_MUX_PORT = 20001
@@ -225,8 +227,7 @@ def start_mux(port: str, baudrate: int | None, workspace: str | None, vserial_li
             )
         else:
             # 清理僵尸状态
-            state.pop(STATE_KEY, None)
-            save_workspace_state(state, workspace)
+            drop_mux_state(workspace, existing)
 
     # 获取串口配置
     cfg, sources = get_serial_config(
@@ -332,8 +333,7 @@ def start_mux(port: str, baudrate: int | None, workspace: str | None, vserial_li
     }
 
     # 保存状态
-    state[STATE_KEY] = mux_info
-    save_workspace_state(state, workspace)
+    update_state_entry(STATE_KEY, mux_info, workspace)
     save_project_config(workspace, {
         "port": real_port,
         "baudrate": cfg["baudrate"],
@@ -385,24 +385,22 @@ def stop_mux(workspace: str | None = None):
         except OSError:
             pass
 
-    # 清理状态
-    state.pop(STATE_KEY, None)
-    save_workspace_state(state, workspace)
-
     if failed:
+        message = f"已终止 {len(killed)} 个进程，{len(failed)} 个失败"
         return make_result(
-            success=True,
+            success=False,
             action="mux_stop",
-            summary=f"已终止 {len(killed)} 个进程，{len(failed)} 个失败",
+            summary=message,
+            error={"code": "mux_stop_failed", "message": message},
             details={"killed": killed, "failed": failed, "vserial": mux_info.get("vserial")},
         )
-    else:
-        return make_result(
-            success=True,
-            action="mux_stop",
-            summary=f"Mux 已停止 ({len(killed)} 个进程已终止)",
-            details={"killed": killed, "vserial": mux_info.get("vserial")},
-        )
+    drop_mux_state(workspace, mux_info)
+    return make_result(
+        success=True,
+        action="mux_stop",
+        summary=f"Mux 已停止 ({len(killed)} 个进程已终止)",
+        details={"killed": killed, "vserial": mux_info.get("vserial")},
+    )
 
 
 def is_mux_alive(mux_info: dict) -> bool:
@@ -433,8 +431,7 @@ def status_mux(workspace: str | None = None):
 
     alive = is_mux_alive(mux_info)
     if not alive:
-        state.pop(STATE_KEY, None)
-        save_workspace_state(state, workspace)
+        drop_mux_state(workspace, mux_info)
         return make_result(
             success=True,
             action="mux_status",
@@ -459,7 +456,7 @@ def status_mux(workspace: str | None = None):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
-        serve_parser = argparse.ArgumentParser(description="Serial mux 后台服务")
+        serve_parser = ArgumentParser(description="Serial mux 后台服务")
         serve_parser.add_argument("--port", required=True)
         serve_parser.add_argument("--baudrate", type=int, required=True)
         serve_parser.add_argument("--bytesize", type=int, required=True)
@@ -476,8 +473,9 @@ def main():
         }
         sys.exit(run_mux_server(config, args.tcp_port))
 
-    parser = argparse.ArgumentParser(description="Serial 多路复用管理")
+    parser = ArgumentParser(description="Serial 多路复用管理")
     sub = parser.add_subparsers(dest="command", help="子命令")
+    parser.add_argument("--json", action="store_true")
 
     p_start = sub.add_parser("start", help="启动多路复用")
     p_start.add_argument("--port", help="真实串口号 (如 /dev/ttyUSB0)")
@@ -489,26 +487,22 @@ def main():
 
     sub.add_parser("status", help="查询多路复用状态").add_argument("--workspace", help="工作区路径")
 
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    if "--json" in argv:
+        argv = ["--json", *(arg for arg in argv if arg != "--json")]
+    args = parser.parse_args(argv)
 
     if args.command == "start":
         result = start_mux(args.port, args.baudrate, getattr(args, "workspace", None), args.vserial)
     elif args.command == "stop":
         result = stop_mux(getattr(args, "workspace", None))
-    elif args.command == "status":
-        result = status_mux(getattr(args, "workspace", None))
     else:
-        result = status_mux()
-        if result["details"].get("running"):
-            print(f"Mux 运行中: {result['details']['real_port']} -> TCP:{result['details']['tcp_port']} -> PTY:{result['details']['vserial']}")
-            print(f"  虚拟串口: {result['details']['vserial']}")
-            print(f"  TCP 端口: {result['details']['tcp_port']}")
-            print(f"  启动时间: {result['details']['started_at']}")
-        else:
-            print("Mux 未运行. 使用 'start --port <串口>' 启动")
+        result = status_mux(args.workspace if args.command else None)
 
     output_json(result)
+    if result["status"] == "error":
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -1,20 +1,14 @@
 """CAN 数据库解码：用 DBC/ARXML/KCD 等文件解码单帧或日志"""
 
-import argparse
-import json
 import sys
 from pathlib import Path
+
+from can_runtime import ArgumentParser, run_cli, output_json
 
 
 def parse_hex_data(s):
     s = s.replace(" ", "").replace(",", "")
     return bytes.fromhex(s)
-
-
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
 
 
 def load_database(db_path, db_format="auto"):
@@ -143,7 +137,7 @@ def decode_log_file(db, log_path, signal_filter=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CAN 数据库解码")
+    parser = ArgumentParser(description="CAN 数据库解码")
     parser.add_argument("db_file", help="数据库文件路径（DBC/ARXML/KCD/SYM/CDD）")
     parser.add_argument("--db-format", default="auto", help="数据库格式（auto|dbc|arxml|kcd|sym|cdd）")
     parser.add_argument("--id", help="单帧 CAN ID（支持 0x 前缀）")
@@ -252,4 +246,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

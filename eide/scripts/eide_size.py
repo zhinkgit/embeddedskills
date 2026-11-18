@@ -2,38 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from shutil import which
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-from eide_runtime import (  # noqa: E402
-    compact_dict,
-    hidden_subprocess_kwargs,
-    is_missing,
-    load_local_config,
-    load_project_config,
-    load_workspace_state,
-    make_result,
-    make_timing,
-    normalize_path,
-    now_io,
-    resolve_tool_param,
-    workspace_root,
-)
-
-
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+from eide_runtime import ArgumentParser, load_local_config, output_json, run_cli
 
 
 def _find_size_tool(prefix: str) -> str:
@@ -259,7 +234,7 @@ def run_size_compare(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="EIDE ELF size analysis"
     )
     sub = parser.add_subparsers(dest="command")
@@ -301,6 +276,8 @@ def main() -> None:
         result = run_size_analyze(args.elf, size_tool)
         if args.as_json:
             output_json(result)
+            if result["status"] == "error":
+                sys.exit(1)
         else:
             if result["status"] == "ok":
                 m = result["metrics"]
@@ -335,6 +312,8 @@ def main() -> None:
         )
         if args.as_json:
             output_json(result)
+            if result["status"] == "error":
+                sys.exit(1)
         else:
             if result["status"] == "ok":
                 m = result["metrics"]
@@ -370,4 +349,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

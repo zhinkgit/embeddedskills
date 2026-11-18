@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import platform
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SKILL_NAME = "can"
 STATE_DIR_NAME = ".embeddedskills"
-STATE_FILE_NAME = "state.json"
+STATE_FILE_NAME = Path("state") / "can.json"
 PROJECT_CONFIG_FILE = "config.json"
 
 
@@ -37,11 +42,44 @@ def load_json_file(path: str | Path) -> dict:
         return {}
 
 
+@contextmanager
+def json_write_lock(path: Path):
+    """Protect a read-modify-write update without locking readers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as lock:
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def save_json_file(path: str | Path, data: dict) -> None:
     """保存 JSON 文件，自动创建目录"""
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=file_path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+        except BaseException:
+            stream.close()
+            temporary.unlink()
+            raise
+    try:
+        for attempt in range(10):
+            try:
+                temporary.replace(file_path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 9:
+                    raise
+                sleep(0.025)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_local_config() -> dict:
@@ -80,13 +118,14 @@ def save_project_config(workspace: str | None = None, values: dict | None = None
     if values is None:
         return
     proj_path = workspace_root(workspace) / STATE_DIR_NAME / PROJECT_CONFIG_FILE
-    proj_config = load_json_file(proj_path)
-    proj_config[SKILL_NAME] = {**proj_config.get(SKILL_NAME, {}), **values}
-    save_json_file(proj_path, proj_config)
+    with json_write_lock(proj_path):
+        proj_config = load_json_file(proj_path)
+        proj_config[SKILL_NAME] = {**proj_config.get(SKILL_NAME, {}), **values}
+        save_json_file(proj_path, proj_config)
 
 
 def load_workspace_state(workspace: str | None = None) -> dict:
-    """从 workspace/.embeddedskills/state.json 读取状态"""
+    """从 workspace/.embeddedskills/state/can.json 读取状态"""
     return load_json_file(workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME)
 
 
@@ -99,9 +138,10 @@ def save_workspace_state(state: dict, workspace: str | None = None) -> Path:
 
 def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
     """更新状态条目"""
-    state = load_workspace_state(workspace)
-    state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
-    file_path = save_workspace_state(state, workspace)
+    with json_write_lock(workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME):
+        state = load_workspace_state(workspace)
+        state[category] = {**record, "timestamp": record.get("timestamp") or now_iso()}
+        file_path = save_workspace_state(state, workspace)
     return {
         "workspace": str(workspace_root(workspace)),
         "file": str(file_path),
@@ -453,7 +493,41 @@ def open_can_bus(config: dict):
     return can.Bus(**bus_kwargs)
 
 
-def output_json(data: dict, *, indent: int = 2) -> None:
+def output_json(data: dict, *, indent: int | None = 2, stream=None) -> None:
     """输出 JSON 到 stdout"""
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=indent), flush=True)
+    if "status" in data:
+        error = data.get("error") or {}
+        if data["status"] == "error":
+            message = error.get("message") or data.get("summary") or "Command failed"
+            error = {**error, "code": error.get("code") or "command_failed", "message": message}
+            data = {**data, "error": error}
+        data = {**data, "summary": data.get("summary") or error.get("message") or str(data.get("action", SKILL_NAME)),
+                "details": data.get("details") or {}}
+    stream = sys.stdout if stream is None else stream
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8")
+    print(json.dumps(data, ensure_ascii=False, indent=indent), file=stream, flush=True)
+
+
+def output_event(data: dict, event: str) -> None:
+    output_json({**data, "event": event}, indent=None)
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "--json" in sys.argv[1:]:
+            output_json({"status": "error", "action": Path(sys.argv[0]).stem, "summary": message,
+                         "error": {"code": "invalid_arguments", "message": message}})
+            raise SystemExit(2)
+        super().error(message)
+
+
+def run_cli(main) -> None:
+    try:
+        main()
+    except (OSError, ValueError) as exc:
+        if "--json" not in sys.argv[1:]:
+            raise
+        output_json({"status": "error", "action": Path(sys.argv[0]).stem, "summary": str(exc),
+                     "error": {"code": "command_failed", "message": str(exc)}})
+        raise SystemExit(1) from exc

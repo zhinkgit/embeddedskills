@@ -4,8 +4,6 @@
 halt / resume / step / reg / read-mem / write-mem / bp / rbp / run-to
 """
 
-import argparse
-import json
 import os
 import re
 import signal
@@ -28,6 +26,9 @@ from openocd_runtime import (
     get_state_entry,
     workspace_root,
     is_missing,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -283,11 +284,6 @@ def has_command_error(raw: str) -> bool:
 
 # ── 主逻辑 ────────────────────────────────────────────────────
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2), flush=True)
-
-
 ALL_ACTIONS = ["halt", "resume", "step", "reg", "read-mem", "write-mem", "bp", "rbp", "run-to"]
 
 
@@ -358,7 +354,7 @@ def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> di
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenOCD Telnet 调试命令")
+    parser = ArgumentParser(description="OpenOCD Telnet 调试命令")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default="openocd", help="openocd 路径")
     parser.add_argument("--board", default=None, help="board 配置文件")
@@ -732,4 +728,4 @@ def print_result(result: dict, action: str):
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

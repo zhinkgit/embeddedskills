@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """基于 tshark/capinfos 的 pcap 离线分析工具。"""
 
-import argparse
 import io
-import json
 import os
 import re
 import subprocess
@@ -13,7 +11,14 @@ import tempfile
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-from net_runtime import decode_text, load_local_config, resolve_tool_path
+from net_runtime import (
+    decode_text,
+    load_local_config,
+    resolve_tool_path,
+    ArgumentParser,
+    run_cli,
+    output_json,
+)
 
 
 def load_config():
@@ -210,7 +215,7 @@ def get_io_stats(tshark_exe, pcap_file, display_filter="", decode_as=""):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="分析 pcap 文件")
+    parser = ArgumentParser(description="分析 pcap 文件")
     parser.add_argument("pcap_file", help="pcap/pcapng 文件路径")
     parser.add_argument("--mode", default="summary",
                         choices=["summary", "protocols", "conversations", "endpoints", "io", "anomalies", "all"])
@@ -228,7 +233,7 @@ def main():
             "action": "analyze",
             "error": {"code": "file_not_found", "message": f"文件不存在: {args.pcap_file}"},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     config = load_config()
@@ -257,7 +262,7 @@ def main():
                 "action": "analyze",
                 "error": {"code": "filter_failed", "message": stderr.strip() or "过滤失败"},
             }
-            print(json.dumps(error, ensure_ascii=False, indent=2))
+            output_json(error)
             sys.exit(1)
         analysis_input = filtered_input
 
@@ -326,7 +331,7 @@ def main():
 
     try:
         if args.output_json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            output_json(result)
         else:
             print(f"[net analyze] {result.get('summary', '分析完成')}")
             details = result["details"]
@@ -356,4 +361,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

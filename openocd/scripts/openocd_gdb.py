@@ -12,10 +12,6 @@ from pathlib import Path
 from shutil import which
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from openocd_gdb_common import build_gdb_commands, parse_gdb_output, run_gdb_commands  # noqa: E402
 from openocd_runtime import (  # noqa: E402
     build_artifacts,
@@ -37,6 +33,8 @@ from openocd_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -183,11 +181,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 def build_parser(legacy_server: bool) -> argparse.ArgumentParser:
     if legacy_server:
-        parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动")
+        parser = ArgumentParser(description="OpenOCD GDB Server 启动")
         add_common_args(parser)
         return parser
 
-    parser = argparse.ArgumentParser(description="OpenOCD GDB Server 启动与调试")
+    parser = ArgumentParser(description="OpenOCD GDB Server 启动与调试")
     sub = parser.add_subparsers(dest="command")
     for name in GDB_ACTIONS:
         sub_parser = sub.add_parser(name, help=f"GDB {name}")
@@ -206,11 +204,10 @@ def _legacy_mode() -> bool:
 
 
 def _state_lookup(state: dict) -> dict:
-    last_build = get_state_entry(state, "last_build")
     last_flash = get_state_entry(state, "last_flash")
     last_debug = get_state_entry(state, "last_debug")
-    artifacts = last_build.get("artifacts", {})
     return {
+        "debug_file": last_debug.get("debug_file") or (last_debug.get("artifacts") or {}).get("debug_file"),
         "board": last_debug.get("board") or last_flash.get("board"),
         "interface": last_debug.get("interface") or last_flash.get("interface"),
         "target": last_debug.get("target") or last_flash.get("target"),
@@ -219,8 +216,6 @@ def _state_lookup(state: dict) -> dict:
         "transport": last_debug.get("transport") or last_flash.get("transport"),
         "gdb_port": last_debug.get("gdb_port"),
         "telnet_port": last_debug.get("telnet_port"),
-        "elf_file": last_build.get("debug_file") or last_build.get("elf_file") or artifacts.get("debug_file"),
-        "debug_file": last_build.get("debug_file") or artifacts.get("debug_file"),
     }
 
 
@@ -428,9 +423,6 @@ def main() -> None:
                 config_keys=["gdb_exe"],
                 normalize_as_path=True,
             )
-            if is_missing(gdb_exe) and not is_missing(project_config.get("gdb_exe")):
-                gdb_exe = normalize_path(project_config.get("gdb_exe"))
-                parameter_sources["gdb_exe"] = "project_config:gdb_exe"
             if is_missing(gdb_exe):
                 discovered = which("arm-none-eabi-gdb") or which("arm-none-eabi-gdb.exe")
                 if discovered:
@@ -441,12 +433,13 @@ def main() -> None:
             elf_file, parameter_sources["elf"] = resolve_param(
                 "elf",
                 args.elf,
-                config=config,
-                config_keys=["default_elf"],
+                config=project_config,
+                config_keys=["elf", "elf_file", "debug_file"],
                 state_record=state_lookup,
                 state_keys=["elf_file", "debug_file"],
-                normalize_as_path=True,
             )
+            if not is_missing(elf_file):
+                elf_file = str((workspace / Path(str(elf_file)).expanduser()).resolve())
         except ValueError as exc:
             result = make_result(
                 status="error",
@@ -674,4 +667,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

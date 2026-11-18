@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import subprocess
@@ -33,6 +32,8 @@ from probe_rs_runtime import (
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -130,18 +131,14 @@ def normalize_write_values(value_text: str) -> list[str]:
 
 
 def _state_lookup(state: dict) -> dict:
-    last_build = get_state_entry(state, "last_build")
     last_flash = get_state_entry(state, "last_flash")
     last_debug = get_state_entry(state, "last_debug")
-    artifacts = last_build.get("artifacts", {})
     return {
         "chip": last_debug.get("chip") or last_flash.get("chip"),
         "probe": last_debug.get("probe") or last_flash.get("probe"),
         "protocol": last_debug.get("protocol") or last_flash.get("protocol"),
         "speed": last_debug.get("speed") or last_flash.get("speed"),
         "connect_under_reset": last_debug.get("connect_under_reset") or last_flash.get("connect_under_reset"),
-        "elf_file": last_build.get("debug_file") or artifacts.get("debug_file"),
-        "flash_file": last_build.get("flash_file") or artifacts.get("flash_file"),
     }
 
 
@@ -215,14 +212,12 @@ def resolve_probe_params(args, config: dict, project_config: dict, state_lookup:
 
     file_path = args.file
     file_source = "cli"
-    if is_missing(file_path) and args.action == "flash":
-        file_path = state_lookup.get("flash_file")
-        file_source = "state"
-    if is_missing(file_path) and args.action in {"run", "attach"}:
-        file_path = state_lookup.get("elf_file")
-        file_source = "state"
+    if is_missing(file_path) and args.action in {"flash", "run", "attach"}:
+        key = "flash_file" if args.action == "flash" else "elf"
+        file_path = project_config.get("file") or project_config.get(key)
+        file_source = "project_config"
     if not is_missing(file_path):
-        file_path = normalize_path(str(file_path))
+        file_path = normalize_path(str(Path(workspace) / str(file_path)))
     parameter_sources["file"] = file_source
 
     return (
@@ -375,7 +370,7 @@ def state_payload(action: str, params: dict) -> tuple[str, dict] | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="probe-rs 基础操作包装")
+    parser = ArgumentParser(description="probe-rs 基础操作包装")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default=None, help="probe-rs 可执行文件路径或命令名")
     parser.add_argument("--chip", default=None, help="芯片型号")
@@ -492,6 +487,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
     elif result["status"] == "ok":
         print(f"[probe-rs {args.action}] {result['summary']}")
         output = result.get("details", {}).get("output", "")
@@ -503,4 +500,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

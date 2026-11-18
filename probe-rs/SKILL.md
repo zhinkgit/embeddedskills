@@ -14,6 +14,10 @@ argument-hint: "[list|info|flash|erase|reset|read-mem|write-mem|attach|run|gdb|r
 
 Windows 下优先使用 `py -3` 调用脚本；若 `arm-none-eabi-gdb` 已在 `PATH` 中，`gdb` 子命令可自动发现，不强依赖 skill `config.json`。
 
+## 运行依赖
+
+Windows 或 Linux，Python 3.10+ 和 probe-rs CLI。源码调试需要对应的 GDB。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -56,7 +60,7 @@ Windows 下优先使用 `py -3` 调用脚本；若 `arm-none-eabi-gdb` 已在 `P
 - `speed`：调试速率 kHz
 - `connect_under_reset`：连接时是否保持 reset
 
-参数优先级：**CLI 参数 > 工程配置（.embeddedskills/config.json）> state.json > skill 配置（config.json）> 默认值**
+工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 
 各层职责：skill `config.json` 提供工具路径与端口等环境级常量；`.embeddedskills/config.json` 提供芯片、协议等工程级参数；CLI 参数在单次调用中覆盖一切。
 
@@ -102,5 +106,4 @@ py -3 <skill-dir>/scripts/probe_rs_rtt.py --chip STM32F407VGTx --json
 - 不自动猜测 `chip`，缺失时直接报错
 - 多探针场景建议显式提供 `--probe`；若未检测到任何探针，应提示用户检查 USB 连接并重试；若探针配置错误（如 VID:PID 不匹配），应报告具体错误信息并建议运行 `list` 子命令确认可用探针
 - `.bin` 烧录必须显式提供地址
-- `workflow build-debug` 只走 one-shot 诊断包装，不启动需要人工接管的长期 DAP 会话
 - Windows 下若要用 `probe-rs` 驱动 `J-Link`，通常需要切换到 `WinUSB`，这会影响 SEGGER 官方工具继续使用；若仍依赖 J-Link 官方工具链，优先继续用现有 `jlink` skill

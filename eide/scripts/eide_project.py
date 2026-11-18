@@ -5,12 +5,13 @@ Parses .eide/eide.yml to discover projects and list build configurations.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+from eide_runtime import ArgumentParser, run_cli, output_json
 
 
 EIDE_YML = ".eide" + os.sep + "eide.yml"
@@ -213,13 +214,8 @@ def load_json_file(path: str | Path) -> dict:
         return {}
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
 def main():
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="EIDE project scanner and config enumeration"
     )
     sub = parser.add_subparsers(dest="command")
@@ -298,4 +294,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

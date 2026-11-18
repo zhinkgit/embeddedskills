@@ -1,11 +1,15 @@
 """串口扫描：枚举系统串口并展示设备信息"""
 
-import argparse
 import json
 import sys
 from pathlib import Path
 
-from serial_runtime import get_mux_info
+from serial_runtime import (
+    get_mux_info,
+    ArgumentParser,
+    run_cli,
+    output_json,
+)
 
 COMMON_DEVICES_PATH = Path(__file__).parent.parent / "references" / "common_devices.json"
 
@@ -58,14 +62,8 @@ def scan_ports(filter_keyword=None):
     return ports, None
 
 
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
-
-
 def main():
-    parser = argparse.ArgumentParser(description="扫描系统串口")
+    parser = ArgumentParser(description="扫描系统串口")
     parser.add_argument("--filter", help="按关键词过滤")
     parser.add_argument("--json", action="store_true", help="JSON 输出")
     args = parser.parse_args()
@@ -112,4 +110,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

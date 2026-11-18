@@ -1,10 +1,11 @@
 """GCC 嵌入式工程扫描与 CMake preset 枚举"""
 
-import argparse
 import json
 import re
 import sys
 from pathlib import Path
+
+from gcc_runtime import ArgumentParser, run_cli, output_json
 
 EXCLUDE_DIRS = {"build", ".git", "node_modules", "__pycache__", ".vscode"}
 
@@ -151,13 +152,8 @@ def list_presets(project_dir: str) -> dict:
     }
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
 def main():
-    parser = argparse.ArgumentParser(description="GCC 嵌入式工程扫描与 preset 枚举")
+    parser = ArgumentParser(description="GCC 嵌入式工程扫描与 preset 枚举")
     sub = parser.add_subparsers(dest="command")
 
     scan_p = sub.add_parser("scan", help="搜索嵌入式 CMake 工程")
@@ -225,4 +221,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import queue
 import signal
@@ -12,10 +11,6 @@ import threading
 import time
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from jlink_runtime import (  # noqa: E402
     default_config_path,
@@ -37,6 +32,8 @@ from jlink_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -212,7 +209,7 @@ def resolve_device_params(args, project_config: dict, state_lookup: dict) -> dic
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="J-Link RTT 日志读取")
+    parser = ArgumentParser(description="J-Link RTT 日志读取")
     parser.add_argument("--device", default=None, help="芯片型号")
     parser.add_argument("--gdbserver-exe", default=None, help="JLinkGDBServerCL.exe 路径")
     parser.add_argument("--rtt-exe", default=None, help="JLinkRTTClient.exe 路径")
@@ -442,4 +439,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

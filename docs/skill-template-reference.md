@@ -2,6 +2,8 @@
 
 ## 1. 这些 skill 的共同特点
 
+每个 Skill 的发布包包含全部运行脚本和资源，使用包内路径定位。先在只解包该 Skill 的目录验证，再发布。
+
 当前仓库里的 skill，虽然面向的工具不同，但实现风格基本收敛到了同一套模型：
 
 ### 1.1 三层配置 + PATH
@@ -11,15 +13,15 @@
 1. CLI 显式参数
 2. `skill/config.json`
 3. `<workspace>/.embeddedskills/config.json`
-4. `<workspace>/.embeddedskills/state.json`
+4. `<workspace>/.embeddedskills/state/<skill>.json`
 5. 系统 `PATH`
 6. 默认值
 
 其中：
 
 - 工具路径优先走 `CLI > skill/config.json > PATH > 默认命令名`
-- 工程参数优先走 `CLI > .embeddedskills/config.json > state.json > 默认值/报错`
-- 产物路径优先走 `CLI > .embeddedskills/config.json > state.json > 默认值/报错`
+- 工程参数优先走 `CLI > .embeddedskills/config.json > 本 Skill 的状态文件 > 默认值/报错`
+- 产物路径优先走 `CLI > .embeddedskills/config.json > 本 Skill 的状态文件 > 默认值/报错`
 
 ### 1.2 统一 runtime 层
 
@@ -78,10 +80,10 @@
 共同约束：
 
 - `.embeddedskills/config.json` 存“长期可复用的工程默认值”
-- `.embeddedskills/state.json` 存“最近一次成功执行的运行记录”
+- `.embeddedskills/state/<skill>.json` 存“最近一次成功执行的运行记录”
 - 成功后通常会：
   - 把确认过的工程参数写回 `.embeddedskills/config.json`
-  - 把最近一次执行信息写回 `.embeddedskills/state.json`
+  - 把最近一次执行信息写回 `.embeddedskills/state/<skill>.json`
 
 ### 1.5 入口脚本职责清晰
 
@@ -155,7 +157,7 @@ from typing import Any
 
 
 STATE_DIR_NAME = ".embeddedskills"
-STATE_FILE_NAME = "state.json"
+STATE_FILE_NAME = Path("state") / "your-skill.json"
 PROJECT_CONFIG_FILE_NAME = "config.json"
 SKILL_NAME = "your-skill"
 
@@ -594,15 +596,15 @@ description: 一句话描述能力范围
 
 用于工程默认参数。
 
-### 状态文件（.embeddedskills/state.json）
+### 状态文件（.embeddedskills/state/<skill>.json）
 
 用于保存最近一次成功执行记录。
 
 ## 参数解析优先级
 
 - 工具路径：`CLI > skill/config.json > PATH > 默认值`
-- 工程参数：`CLI > .embeddedskills/config.json > state.json > 默认值/报错`
-- 产物路径：`CLI > .embeddedskills/config.json > state.json > 默认值/报错`
+- 工程参数：`CLI > .embeddedskills/config.json > 本 Skill 的状态文件 > 默认值/报错`
+- 产物路径：`CLI > .embeddedskills/config.json > 本 Skill 的状态文件 > 默认值/报错`
 
 ## 子命令
 
@@ -633,7 +635,7 @@ python <skill-dir>/scripts/your_skill_exec.py action --json
 
 - 缺少关键参数时不自动猜测
 - 单一候选可自动发现并写回工程配置
-- 成功执行后更新 `.embeddedskills/config.json` 和 `state.json`
+- 成功执行后更新 `.embeddedskills/config.json` 和 `本 Skill 的状态文件`
 ```
 
 ---

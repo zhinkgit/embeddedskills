@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """基于 tshark 的抓包工具，支持保存文件、过滤、解码规则和结构化输出。"""
 
-import argparse
 import io
 import json
 import os
@@ -19,6 +18,10 @@ from net_runtime import (
     save_project_config,
     update_state_entry,
     check_tshark,
+    ArgumentParser,
+    run_cli,
+    output_json,
+    now_iso,
 )
 
 
@@ -64,7 +67,7 @@ def build_tshark_cmd(config, args, *, output_path="", include_display_filter=Tru
 
 
 def main():
-    parser = argparse.ArgumentParser(description="tshark 抓包")
+    parser = ArgumentParser(description="tshark 抓包")
     parser.add_argument("--interface", "-i", help="抓包接口")
     parser.add_argument("--duration", type=int, help="抓包时长(秒)")
     parser.add_argument("--capture-filter", "-f", help="抓包过滤器(BPF)")
@@ -94,7 +97,7 @@ def main():
                 "message": f"未找到 tshark ({exe})，请确认 Wireshark 已安装且已加入 PATH",
             },
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     iface = config["interface"]
@@ -107,7 +110,7 @@ def main():
                 "message": "未配置抓包接口，请用 --interface 指定或在 .embeddedskills/config.json 中配置",
             },
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     # 保存确认的配置
@@ -148,6 +151,7 @@ def main():
             print("  保存策略: 先原始抓包，再按显示过滤器离线筛选", file=sys.stderr)
     print(f"  命令: {' '.join(cmd)}", file=sys.stderr)
 
+    proc = None
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False
@@ -156,7 +160,14 @@ def main():
         stdout_text = decode_text(stdout_data)
         stderr_output = decode_text(stderr_data)
 
-        if stdout_text:
+        if args.output_json and not args.output:
+            for line in stdout_text.splitlines():
+                if line.strip():
+                    data = json.loads(line)
+                    event = "capture_index" if "index" in data else "packet"
+                    output_json({"event": event, "timestamp": data.get("timestamp") or now_iso(),
+                                 "data": data}, indent=None)
+        elif not args.output_json and stdout_text:
             print(stdout_text, end="")
 
         if proc.returncode != 0:
@@ -168,7 +179,7 @@ def main():
                     "message": stderr_output.strip() or f"tshark 退出码 {proc.returncode}",
                 },
             }
-            print(json.dumps(error, ensure_ascii=False, indent=2))
+            output_json({**error, "event": "error", "timestamp": now_iso()}, indent=None)
             sys.exit(1)
 
         if filter_after_capture:
@@ -194,7 +205,7 @@ def main():
                         "message": filtered_stderr.strip() or f"过滤失败，退出码 {filtered.returncode}",
                     },
                 }
-                print(json.dumps(error, ensure_ascii=False, indent=2))
+                output_json(error)
                 sys.exit(1)
             if filtered_stderr.strip():
                 print(filtered_stderr, file=sys.stderr)
@@ -209,7 +220,10 @@ def main():
             summary["summary"] += f"，文件: {args.output} ({size} bytes)"
             summary["details"] = {"output_file": args.output, "file_size": size}
 
-        print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr)
+        if args.output_json and not args.output:
+            output_json({**summary, "event": "summary", "timestamp": now_iso()}, indent=None)
+        else:
+            output_json(summary, stream=sys.stdout if args.output_json else sys.stderr)
 
         # 更新状态
         update_state_entry("last_observe", {
@@ -220,15 +234,22 @@ def main():
         })
 
     except KeyboardInterrupt:
-        proc.terminate()
-        print("\n[net capture] 用户中断抓包", file=sys.stderr)
-    except Exception as e:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            proc.wait()
+        if args.output_json:
+            output_json({"status": "error", "action": "capture", "event": "error", "timestamp": now_iso(),
+                         "error": {"code": "interrupted", "message": "用户中断抓包"}}, indent=None)
+        else:
+            print("\n[net capture] 用户中断抓包", file=sys.stderr)
+        sys.exit(130)
+    except (OSError, ValueError) as e:
         error = {
             "status": "error",
             "action": "capture",
             "error": {"code": "capture_failed", "message": str(e)},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json({**error, "event": "error", "timestamp": now_iso()}, indent=None)
         sys.exit(1)
     finally:
         if temp_output and os.path.exists(temp_output):
@@ -236,4 +257,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

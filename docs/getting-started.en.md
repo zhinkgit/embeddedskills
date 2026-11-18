@@ -94,7 +94,7 @@ Skills use a three-layer configuration with priority from high to low:
 CLI args
   └─► skill/config.json              ← Tool paths, local hardware params (UV4.exe, JLink.exe, etc.)
         └─► .embeddedskills/config.json  ← Project defaults (target chip, interface, log dirs)
-              └─► .embeddedskills/state.json  ← Runtime state (last build/flash/debug record)
+              └─► .embeddedskills/state/<skill>.json  ← Runtime state (last build/flash/debug record)
                     └─► Defaults
 ```
 

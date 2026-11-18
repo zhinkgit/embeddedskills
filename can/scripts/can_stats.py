@@ -1,7 +1,5 @@
 """CAN 总线统计：负载率、ID 分布、帧率和数据变化"""
 
-import argparse
-import json
 import sys
 import time
 from collections import defaultdict
@@ -13,6 +11,9 @@ from can_runtime import (
     open_can_bus,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -31,14 +32,8 @@ def format_data(data):
     return " ".join(f"{b:02X}" for b in data)
 
 
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
-
-
 def main():
-    parser = argparse.ArgumentParser(description="CAN 总线统计")
+    parser = ArgumentParser(description="CAN 总线统计")
     add_can_connection_args(parser)
     parser.add_argument("--duration", type=float, default=5.0, help="统计时长（秒，默认 5）")
     parser.add_argument("--top", type=int, default=20, help="显示前 N 个 ID")
@@ -228,4 +223,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

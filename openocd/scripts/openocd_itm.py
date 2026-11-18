@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import argparse
 import signal
 import socket
 import subprocess
@@ -16,10 +15,6 @@ import sys
 import time
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from openocd_runtime import (  # noqa: E402
     default_config_path,
@@ -41,6 +36,8 @@ from openocd_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -254,7 +251,7 @@ def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> di
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="OpenOCD ITM 输出捕获")
+    parser = ArgumentParser(description="OpenOCD ITM 输出捕获")
     parser.add_argument("--exe", default=None, help="openocd 路径")
     parser.add_argument("--board", default=None, help="board 配置文件")
     parser.add_argument("--interface", default=None, help="interface 配置文件")
@@ -322,7 +319,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -339,7 +336,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
@@ -378,7 +375,7 @@ def main() -> None:
                 timing=make_timing(started_at, (time.time() - started_ts) * 1000),
             )
             if args.as_json:
-                output_json(result)
+                output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
             else:
                 print(f"错误: {message}", file=sys.stderr)
             sys.exit(1)
@@ -454,7 +451,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
@@ -470,7 +467,7 @@ def main() -> None:
             timing=make_timing(started_at, (time.time() - started_ts) * 1000),
         )
         if args.as_json:
-            output_json(result)
+            output_json({**result, "event": "error", "timestamp": now_iso()}, indent=None)
         else:
             print(f"错误: {message}", file=sys.stderr)
         sys.exit(1)
@@ -483,4 +480,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -94,7 +94,7 @@ Skill 采用三层配置，优先级从高到低：
 CLI 参数
   └─► skill/config.json              ← 工具路径、本机硬件参数（UV4.exe、JLink.exe 等）
         └─► .embeddedskills/config.json  ← 工程默认配置（目标芯片、接口、日志目录）
-              └─► .embeddedskills/state.json  ← 运行状态（上次构建/烧录/调试记录）
+              └─► .embeddedskills/state/<skill>.json  ← 运行状态（上次构建/烧录/调试记录）
                     └─► 默认值
 ```
 

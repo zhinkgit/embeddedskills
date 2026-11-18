@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """端口扫描工具，支持 TCP 扫描和 Banner 获取。"""
 
-import argparse
 import io
-import json
 import os
 import socket
 import sys
@@ -16,6 +14,9 @@ from net_runtime import (
     get_net_config,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -87,7 +88,7 @@ PORT_SERVICE_MAP = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="端口扫描")
+    parser = ArgumentParser(description="端口扫描")
     parser.add_argument("--target", "-t", help="目标地址")
     parser.add_argument("--ports", "-p", help="端口列表 (如 '80,443,8000-8100')")
     parser.add_argument("--timeout", type=int, default=0, help="超时(毫秒)")
@@ -113,7 +114,7 @@ def main():
             "action": "scan",
             "error": {"code": "no_target", "message": "未配置目标地址，请用 --target 指定或在 .embeddedskills/config.json 中配置"},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     # 保存确认的配置
@@ -152,7 +153,7 @@ def main():
     }
 
     if args.output_json:
-        print(json.dumps(output, ensure_ascii=False, indent=2))
+        output_json(output)
     else:
         print(f"[net scan] {output['summary']}")
         if open_ports:
@@ -173,4 +174,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

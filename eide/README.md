@@ -67,7 +67,8 @@ Claude Code skill，驱动 EIDE (Embedded IDE) 进行工程扫描、构建配置
 
 参数解析顺序（从高到低）：
 1. CLI 显式参数
-2. 环境级配置（skill/config.json）
-3. 工程级配置（.embeddedskills/config.json）
-4. state.json（上次构建记录）
-5. 搜索/询问
+2. 工程级配置（.embeddedskills/config.json）
+3. .embeddedskills/state/eide.json（上次构建记录）
+4. 搜索/询问
+
+工具路径依次读取 CLI、本机配置和 PATH。

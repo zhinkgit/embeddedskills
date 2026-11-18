@@ -13,6 +13,10 @@ argument-hint: "[scan|monitor|send|log|decode|stats] ..."
 
 统一封装接口发现、实时监控、报文发送、日志记录、数据库文件解码和统计分析能力。
 
+## 运行依赖
+
+Windows、Linux，Python 3.10+。总线操作需要 python-can 与接口驱动；DBC 解码需要 cantools。
+
 ## 配置
 
 ### 环境级配置 (`skill/config.json`)
@@ -59,7 +63,7 @@ argument-hint: "[scan|monitor|send|log|decode|stats] ..."
 
 1. **CLI 参数** (`--interface`, `--channel`, `--bitrate` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `can` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/can.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 ### 自动扫描行为

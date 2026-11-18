@@ -13,6 +13,10 @@ argument-hint: "[scan|targets|build|rebuild|clean|flash] ..."
 
 本 skill 提供 Keil MDK 工程的发现、Target 枚举、构建、重建、清理能力，并返回可供 `jlink/openocd` 继续使用的固件产物路径。`flash` 仅作为兼容入口保留。
 
+## 运行依赖
+
+Windows、Python 3.10+ 和 Keil MDK 的 UV4.exe。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -51,10 +55,11 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 
 参数解析顺序（从高到低）：
 1. CLI 显式参数
-2. 环境级配置（skill/config.json）
-3. 工程级配置（.embeddedskills/config.json）
-4. `.embeddedskills/state.json`（上次构建记录）
-5. 搜索/询问
+2. 工程级配置（.embeddedskills/config.json）
+3. `.embeddedskills/state/keil.json`（上次构建记录）
+4. 搜索/询问
+
+工具路径依次读取 CLI、本机配置和 PATH。
 
 ## 子命令
 

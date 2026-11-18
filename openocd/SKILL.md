@@ -16,6 +16,10 @@ argument-hint: "[probe|flash|erase|reset|reset-init|targets|flash-banks|adapter-
 本 skill 提供 OpenOCD 的探针探测、固件烧录、Flash 擦除、GDB Server 启动、目标复位、
 Telnet 在线调试、GDB 源码级调试和 Semihosting 输出捕获能力。
 
+## 运行依赖
+
+Windows 或 Linux，Python 3.10+、OpenOCD、目标和适配器配置。源码调试需要对应的 GDB。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -66,7 +70,7 @@ board/interface/target 等工程参数统一在工作区的 `.embeddedskills/con
 - `transport`：传输协议（swd/jtag）
 - `tpiu_name` / `traceclk` / `pin_freq`：ITM/SWO 观测所需的 TPIU 参数
 
-参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 
 成功执行后，确认过的参数会自动写回工程配置。
 
@@ -117,8 +121,8 @@ board/interface/target 等工程参数统一在工作区的 `.embeddedskills/con
 
 1. 读取 `skill/config.json`，确认 `exe` 路径有效
 2. 读取 `.embeddedskills/config.json` 获取工程级配置（board/interface/target 等）
-3. 读取 `.embeddedskills/state.json` 获取历史状态
-4. 参数解析优先级：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+3. 读取 `.embeddedskills/state/openocd.json` 获取历史状态
+4. 工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 5. 已知 `board` 时优先使用 `-f board/*.cfg`，否则组合 `-f interface/*.cfg -f target/*.cfg`
 6. `board`、`interface`、`target` 同时缺失时，不自动拼接组合，直接要求用户补充
 7. 按 `operation_mode` 决定是否需要确认后执行
@@ -326,7 +330,7 @@ GDB 调用栈示例：
 
 - 不自动猜测 `board`、`interface`、`target` 的组合，缺失时必须询问用户
 - 已知 `board` 时优先使用 board 配置，不再需要 interface+target
-- 参数解析优先级为：**CLI 显式参数 > `.embeddedskills/config.json`（工程级）> `skill/config.json`（环境级）> `.embeddedskills/state.json` > 默认值/报错**
+- 工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 - `.bin` 文件必须显式提供烧录地址，缺失时报错
 - STM32F4 等已映射 target 在 `erase --mode auto` 下会先 `reset halt`，再优先使用 mass erase
 - `erase --mode mass` 在未命中映射时直接返回 `mass_erase_unsupported`，避免误以为已做整片擦除
@@ -338,8 +342,8 @@ GDB 调用栈示例：
 - Telnet 调试命令每次启动独立的 OpenOCD Server，执行完自动关闭
 - Semihosting 通过 Telnet 启用后持续读取 OpenOCD stderr 输出
 - 结果回显中始终包含 cfg 组合、端口和执行动作
-- 产物路径（elf/file）不进入工程配置，仍只依赖 `state.json`
-- `last_flash`/`last_debug`/`last_observe` 等运行状态继续写入 `state.json`
+- 可通过 CLI 或本 Skill 的工程配置指定固件和 ELF 路径
+- `last_flash`/`last_debug`/`last_observe` 等运行状态继续写入 `.embeddedskills/state/openocd.json`
 
 ## 参考
 

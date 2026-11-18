@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import signal
 import socket
@@ -12,10 +11,6 @@ import time
 from pathlib import Path
 from shutil import which
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from probe_rs_gdb_common import build_gdb_commands, parse_gdb_output, run_gdb_commands  # noqa: E402
 from probe_rs_runtime import (  # noqa: E402
@@ -36,6 +31,8 @@ from probe_rs_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -126,21 +123,19 @@ def cleanup(procs: list[subprocess.Popen]) -> None:
 
 
 def _state_lookup(state: dict) -> dict:
-    last_build = get_state_entry(state, "last_build")
     last_flash = get_state_entry(state, "last_flash")
     last_debug = get_state_entry(state, "last_debug")
-    artifacts = last_build.get("artifacts", {})
     return {
+        "debug_file": last_debug.get("debug_file") or (last_debug.get("artifacts") or {}).get("debug_file"),
         "chip": last_debug.get("chip") or last_flash.get("chip"),
         "probe": last_debug.get("probe") or last_flash.get("probe"),
         "protocol": last_debug.get("protocol") or last_flash.get("protocol"),
         "speed": last_debug.get("speed") or last_flash.get("speed"),
         "connect_under_reset": last_debug.get("connect_under_reset") or last_flash.get("connect_under_reset"),
-        "elf_file": last_build.get("debug_file") or last_build.get("elf_file") or artifacts.get("debug_file"),
     }
 
 
-def resolve_probe_params(args, config: dict, project_config: dict, state_lookup: dict) -> tuple[dict, dict]:
+def resolve_probe_params(args, config: dict, project_config: dict, state_lookup: dict, workspace: Path) -> tuple[dict, dict]:
     parameter_sources: dict[str, str] = {}
 
     exe = args.exe if not is_missing(args.exe) else config.get("exe") or "probe-rs"
@@ -220,10 +215,13 @@ def resolve_probe_params(args, config: dict, project_config: dict, state_lookup:
     elf_file = args.elf
     elf_source = "cli"
     if is_missing(elf_file):
-        elf_file = state_lookup.get("elf_file")
+        elf_file = project_config.get("elf") or project_config.get("elf_file") or project_config.get("debug_file")
+        elf_source = "project_config"
+    if is_missing(elf_file):
+        elf_file = state_lookup.get("debug_file")
         elf_source = "state"
     if not is_missing(elf_file):
-        elf_file = normalize_path(str(elf_file))
+        elf_file = normalize_path(str(workspace / Path(str(elf_file)).expanduser()))
     parameter_sources["elf"] = elf_source
 
     gdb_port = args.gdb_port if args.gdb_port else config.get("gdb_port", 3333)
@@ -283,7 +281,7 @@ def stepping_fallback_commands(action: str) -> list[str] | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="probe-rs GDB Server 调试")
+    parser = ArgumentParser(description="probe-rs GDB Server 调试")
     sub = parser.add_subparsers(dest="command")
     for name in ALL_COMMANDS:
         sub_parser = sub.add_parser(name, help=f"GDB {name}")
@@ -320,7 +318,7 @@ def main() -> None:
     state_lookup = _state_lookup(state)
     project_config = load_project_config(str(workspace))
 
-    params, parameter_sources = resolve_probe_params(args, config, project_config, state_lookup)
+    params, parameter_sources = resolve_probe_params(args, config, project_config, state_lookup, workspace)
     if is_missing(params["chip"]):
         result = make_result(
             status="error",
@@ -491,4 +489,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

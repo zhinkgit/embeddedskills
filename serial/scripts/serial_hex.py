@@ -1,7 +1,5 @@
 """串口 Hex Dump 查看"""
 
-import argparse
-import json
 import signal
 import sys
 import time
@@ -13,16 +11,14 @@ from serial_runtime import (
     open_serial_port,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
+    output_event,
 )
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
 IDLE_FLUSH_SEC = 0.2
-
-
-def output_json(obj):
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
 
 
 def error_exit(code, message, use_json):
@@ -49,19 +45,19 @@ def emit_chunk(data, offset, width, show_ascii, use_json):
     now = datetime.now().isoformat(timespec="milliseconds")
     if use_json:
         ascii_str = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in data)
-        output_json({
+        output_event({
             "timestamp": now,
             "offset": offset,
             "length": len(data),
             "hex": data.hex(" "),
             "ascii": ascii_str,
-        })
+        }, "data")
     else:
         print(hex_dump_line(data, offset, width, show_ascii))
 
 
 def main():
-    parser = argparse.ArgumentParser(description="串口 Hex Dump 查看")
+    parser = ArgumentParser(description="串口 Hex Dump 查看")
     parser.add_argument("--port", help="串口号 (如 COM3)")
     parser.add_argument("--baudrate", type=int, help="波特率")
     parser.add_argument("--bytesize", type=int, help="数据位")
@@ -177,4 +173,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

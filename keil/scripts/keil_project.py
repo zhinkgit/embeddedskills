@@ -1,11 +1,11 @@
 """Keil MDK 工程扫描与 Target 枚举"""
 
-import argparse
-import json
 import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from keil_runtime import ArgumentParser, run_cli, output_json
 
 
 PROJECT_SUFFIXES = (".uvprojx", ".uvproj")
@@ -44,13 +44,8 @@ def list_targets(project_path: str) -> list[dict]:
     return targets
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Keil 工程扫描与 Target 枚举")
+    parser = ArgumentParser(description="Keil 工程扫描与 Target 枚举")
     sub = parser.add_subparsers(dest="command")
 
     scan_p = sub.add_parser("scan", help="搜索工程文件")
@@ -119,4 +114,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from eide_runtime import (  # noqa: E402
     build_artifacts,
@@ -26,16 +22,16 @@ from eide_runtime import (  # noqa: E402
     load_workspace_state,
     make_result,
     make_timing,
-    normalize_path,
     normalize_path_with_base,
     now_iso,
     output_json,
     parameter_context,
     resolve_param,
-    resolve_tool_param,
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 BUILDER_TIMEOUT_SEC = 1800
@@ -498,7 +494,7 @@ def _make_relative_to_workspace(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="EIDE build / rebuild / clean"
     )
     parser.add_argument(
@@ -507,6 +503,7 @@ def main() -> None:
     parser.add_argument(
         "--builder-dir", default=None, help="unify_builder directory path"
     )
+    parser.add_argument("--builder-exe", help="unify_builder executable")
     parser.add_argument(
         "--project", default=None, help="EIDE project root directory"
     )
@@ -536,7 +533,7 @@ def main() -> None:
     started_ts = time.time()
     workspace = workspace_root(args.workspace)
 
-    local_config = load_local_config(__file__)
+    local_config = load_json_file(args.config_file) if args.config_file else load_local_config(__file__)
     project_config = load_project_config(str(workspace))
     state = load_workspace_state(str(workspace))
     last_build = get_state_entry(state, "last_build")
@@ -544,42 +541,25 @@ def main() -> None:
     parameter_sources: dict[str, str] = {}
 
     try:
-        # builder_dir: CLI > config > auto-detect > required
-        builder_dir_val, parameter_sources["builder_dir"] = (
-            resolve_tool_param(
-                "builder_dir",
-                args.builder_dir,
-                local_config=local_config,
-                local_keys=["builder_dir"],
-                required=True,
-            )
-        )
-
-        builder_exe_name, _ = resolve_tool_param(
-            "builder_exe",
-            None,
-            local_config=local_config,
-            local_keys=["builder_exe"],
-            default="unify_builder.exe",
-        )
-
-        # Resolve the actual builder executable
-        builder_dir_path = Path(builder_dir_val)
-        builder_exe_candidate = str(
-            builder_dir_path / str(builder_exe_name)
-        )
-        if not os.path.isfile(builder_exe_candidate):
-            alt = _find_builder_exe(builder_dir_val)
-            if alt:
-                builder_exe_candidate = alt
-        builder_exe = builder_exe_candidate
+        builder_name = args.builder_exe or local_config.get("builder_exe") or "unify_builder"
+        builder_dir = args.builder_dir or local_config.get("builder_dir")
+        if args.builder_exe:
+            builder_exe = shutil.which(builder_name)
+            parameter_sources["builder_exe"] = "cli"
+        elif builder_dir:
+            candidate = Path(builder_dir).expanduser() / builder_name
+            builder_exe = str(candidate) if candidate.is_file() else _find_builder_exe(builder_dir)
+            parameter_sources["builder_exe"] = "cli:builder_dir" if args.builder_dir else "config:builder_dir"
+        else:
+            builder_exe = shutil.which(builder_name)
+            parameter_sources["builder_exe"] = "config:builder_exe" if local_config.get("builder_exe") else f"path:{builder_name}"
+        if not builder_exe:
+            raise ValueError(f"unify_builder executable not found: {builder_name}")
 
         # project: CLI > project_config > state > required
         project, parameter_sources["project"] = resolve_param(
             "project",
             args.project,
-            config=local_config,
-            config_keys=["default_project"],
             normalize_as_path=True,
             workspace=str(workspace),
         )
@@ -604,8 +584,6 @@ def main() -> None:
         config, parameter_sources["config"] = resolve_param(
             "config",
             args.config,
-            config=local_config,
-            config_keys=["default_config"],
         )
         if is_missing(config) and not is_missing(
             project_config.get("config")
@@ -747,6 +725,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
         return
 
     if result["status"] == "ok":
@@ -779,4 +759,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -105,12 +105,11 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔬 Debug | **jlink** | Flash, read/write memory/registers, RTT/SWO, GDB debug | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 Debug | **openocd** | Flash, erase, GDB/Telnet, Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
 | 🔬 Debug | **probe-rs** | Probe discovery, flashing, reset, memory access, GDB debug, RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
-| 🔌 Communication | **serial** | Scan serial ports, real-time monitor, send data, hex view | `scan` `monitor` `send` `hex` `log` |
+| 🔌 Communication | **serial** | Scan serial ports, real-time monitor, send data, hex view | `scan` `monitor` `send` `hex` `log` `mux` |
 | 🔌 Communication | **can** | CAN/CAN-FD monitoring, send frames, DBC decode, statistics | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 Communication | **net** | Packet capture analysis, connectivity test, port scan, traffic stats | `capture` `analyze` `ping` `scan` `stats` |
-| 🔌 Communication | **ssh** | SSH config, environment resolution, read-only probes, remote commands, transfers, jump hosts, and tunnels | `list` `find` `resolve` `show` `add` + exec/probe/transfer/tunnel |
-| 🔌 Communication | **terminal** | Bidirectional serial, SSH, and local shell sessions | `start` `send` `read` `attach` `stop` |
-| 🎯 Orchestration | **workflow** | Auto-detect project → Select toolchain → Orchestrate full flow | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
+| 🔌 Communication | **terminal** | Agent terminal for SSH, serial and local processes | `exec` `start` `send` `read` `serial` `ssh` |
+| 🎯 Planning | **workflow** | Read-only project discovery, planning and diagnostics | `plan` `diagnose` |
 
 > [!TIP]
 > `Keil / GCC` and `J-Link / OpenOCD / probe-rs` can be freely combined orthogonally — all six combinations work out of the box.
@@ -138,10 +137,10 @@ npx skills remove -g    # Remove
 
 ```bash
 # Claude Code (global)
-git clone https://github.com/zhinkgit/embeddedskills.git ~/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills.git `/.claude/skills/embeddedskills
 
 # Codex (global)
-git clone https://github.com/zhinkgit/embeddedskills.git ~/.codex/skills
+git clone https://github.com/zhinkgit/embeddedskills.git `/.codex/skills
 
 # Codex (current project only)
 git clone https://github.com/zhinkgit/embeddedskills.git .codex/skills
@@ -190,13 +189,11 @@ All scripts return a unified JSON structure that AI parses directly for status, 
 
 <br>
 
-**Three-layer configuration**, override as needed, priority from high to low:
+**Configuration sources in resolution order**
 
 ```
-CLI args  ──►  skill/config.json (tool paths, hardware params)
-          ──►  .embeddedskills/config.json (target chip, interface, log dirs)
-          ──►  .embeddedskills/state.json (last build/flash/debug record)
-          ──►  Defaults
+Tool paths          CLI → skill/config.json → PATH
+Project parameters  CLI → .embeddedskills/config.json → .embeddedskills/state/<skill>.json → discovery or defaults
 ```
 
 **Unified Log Directories:**
@@ -228,7 +225,6 @@ workspace/
 | serial | pyserial · USB-to-serial driver |
 | can | python-can · cantools · pyserial · USB-CAN driver |
 | net | Wireshark (tshark) · Npcap |
-| ssh | OpenSSH client (`ssh` / `scp` / `ssh-keygen`) |
 | terminal | pyserial for serial backend · OpenSSH client for SSH backend |
 
 > Except for CAN, serial, and terminal's serial backend, all Skills are implemented using Python standard library — no additional Python dependencies needed.
@@ -254,7 +250,6 @@ workspace/
 | serial | ✅ Tested |
 | net | ✅ Tested |
 | can | 🔧 Pending test |
-| ssh | ✅ Tested |
 | terminal | 🔧 Pending hardware test |
 | workflow | ✅ Tested |
 

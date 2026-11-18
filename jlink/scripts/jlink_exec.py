@@ -1,7 +1,5 @@
 """J-Link 设备探测、烧录、内存读写、寄存器查看、复位、在线调试"""
 
-import argparse
-import json
 import os
 import re
 import subprocess
@@ -26,6 +24,9 @@ from jlink_runtime import (
     normalize_path,
     hidden_subprocess_kwargs,
     is_missing,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 # J-Link Commander 命令模板
@@ -324,11 +325,6 @@ def run_jlink(exe: str, device: str, action: str, interface: str = "SWD",
             pass
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
 ALL_ACTIONS = [
     "info", "flash", "read-mem", "write-mem", "regs", "reset",
     "halt", "go", "step", "run-to",
@@ -421,7 +417,7 @@ def resolve_device_params(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="J-Link 设备探测/烧录/内存读写/寄存器/复位/在线调试")
+    parser = ArgumentParser(description="J-Link 设备探测/烧录/内存读写/寄存器/复位/在线调试")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default="", help="JLink.exe 路径")
     parser.add_argument("--device", default=None, help="芯片型号（如 STM32F407VG）")
@@ -552,6 +548,8 @@ def main():
             "serial_no": params["serial_no_source"],
         }
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
     else:
         if result["status"] == "ok":
             print(f"[{args.action}] {result.get('summary', '成功')}")
@@ -579,4 +577,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

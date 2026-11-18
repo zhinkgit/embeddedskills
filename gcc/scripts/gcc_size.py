@@ -1,7 +1,5 @@
 """GCC 嵌入式 ELF 大小分析"""
 
-import argparse
-import json
 import re
 import subprocess
 import sys
@@ -11,7 +9,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from gcc_runtime import hidden_subprocess_kwargs
+from gcc_runtime import (
+    hidden_subprocess_kwargs,
+    ArgumentParser,
+    run_cli,
+    output_json,
+)
 
 
 def _find_size_tool(toolchain_prefix: str, toolchain_path: str) -> str:
@@ -188,13 +191,8 @@ def _error(action: str, code: str, message: str) -> dict:
     }
 
 
-def output_json(data: dict):
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
 def main():
-    parser = argparse.ArgumentParser(description="GCC 嵌入式 ELF 大小分析")
+    parser = ArgumentParser(description="GCC 嵌入式 ELF 大小分析")
     sub = parser.add_subparsers(dest="command")
 
     analyze_p = sub.add_parser("analyze", help="分析 ELF 大小")
@@ -222,6 +220,8 @@ def main():
         )
         if args.as_json:
             output_json(result)
+            if result["status"] == "error":
+                sys.exit(1)
         else:
             if result["status"] == "ok":
                 s = result["summary"]
@@ -247,6 +247,8 @@ def main():
         )
         if args.as_json:
             output_json(result)
+            if result["status"] == "error":
+                sys.exit(1)
         else:
             if result["status"] == "ok":
                 s = result["summary"]
@@ -266,4 +268,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -65,7 +65,7 @@ Claude Code skill，用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、�
 
 1. **CLI 参数** (`--interface`, `--channel`, `--bitrate` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `can` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/can.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 ### 自动扫描行为

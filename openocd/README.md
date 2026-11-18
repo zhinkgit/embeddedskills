@@ -66,7 +66,7 @@ board/interface/target 等工程参数统一在工作区的 `.embeddedskills/con
 }
 ```
 
-参数解析优先级：**CLI 参数 > 工程配置 > state.json > 默认值**
+工程参数依次读取 CLI、工程配置和本 Skill 的状态。工具路径依次读取 CLI、本机配置和 PATH。
 
 成功执行后，确认过的参数会自动写回工程配置。
 

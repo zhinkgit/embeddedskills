@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """连通性测试工具，支持 ICMP/TCP ping、批量测试和路由追踪。"""
 
-import argparse
-import json
 import os
 import platform
 import re
@@ -15,6 +13,9 @@ from net_runtime import (
     get_net_config,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -130,7 +131,7 @@ def traceroute(target, timeout_ms=1000):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="连通性测试")
+    parser = ArgumentParser(description="连通性测试")
     parser.add_argument("--target", "-t", help="目标地址")
     parser.add_argument("--tcp", type=int, default=0, help="TCP 端口")
     parser.add_argument("--count", type=int, default=4, help="ping 次数")
@@ -158,7 +159,7 @@ def main():
             "action": "ping",
             "error": {"code": "no_target", "message": "未配置目标地址，请用 --target 指定或在 .embeddedskills/config.json 中配置"},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     # 保存确认的配置
@@ -205,7 +206,7 @@ def main():
         output["error"] = {"code": "command_failed", "message": "网络诊断命令执行失败，详见 results"}
 
     if args.output_json:
-        print(json.dumps(output, ensure_ascii=False, indent=2))
+        output_json(output)
     else:
         print(f"[net {action}] {output['summary']['description']}")
         for r in results:
@@ -242,4 +243,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

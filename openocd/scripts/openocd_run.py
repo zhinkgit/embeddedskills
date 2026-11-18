@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import subprocess
@@ -10,10 +9,6 @@ import sys
 import time
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from openocd_runtime import (  # noqa: E402
     build_artifacts,
@@ -35,6 +30,8 @@ from openocd_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -331,10 +328,8 @@ def run_openocd(
 
 
 def _state_lookup(state: dict) -> dict:
-    last_build = get_state_entry(state, "last_build")
     last_flash = get_state_entry(state, "last_flash")
     last_debug = get_state_entry(state, "last_debug")
-    artifacts = last_build.get("artifacts", {})
     return {
         "board": last_debug.get("board") or last_flash.get("board"),
         "interface": last_debug.get("interface") or last_flash.get("interface"),
@@ -342,7 +337,6 @@ def _state_lookup(state: dict) -> dict:
         "search": last_debug.get("search"),
         "adapter_speed": last_debug.get("adapter_speed") or last_flash.get("adapter_speed"),
         "transport": last_debug.get("transport") or last_flash.get("transport"),
-        "flash_file": last_build.get("flash_file") or artifacts.get("flash_file"),
     }
 
 
@@ -413,7 +407,7 @@ def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> di
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="OpenOCD 探针探测/固件烧录/擦除/复位")
+    parser = ArgumentParser(description="OpenOCD 探针探测/固件烧录/擦除/复位")
     parser.add_argument("action", choices=ALL_ACTIONS)
     parser.add_argument("--exe", default=None, help="openocd 路径")
     parser.add_argument("--board", default=None, help="board 配置文件")
@@ -461,7 +455,11 @@ def main() -> None:
         parameter_sources["transport"] = oc_params["transport_source"]
 
         search, parameter_sources["search"] = resolve_param("search", args.search, config=config, config_keys=["scripts_dir"], state_record=state_lookup, state_keys=["search"])
-        file_path, parameter_sources["file"] = resolve_param("file", args.file, config=config, config_keys=["default_file"], state_record=state_lookup, state_keys=["flash_file"], normalize_as_path=True)
+        file_path, parameter_sources["file"] = resolve_param(
+            "file", args.file, config=project_config, config_keys=["file", "flash_file"],
+        )
+        if not is_missing(file_path):
+            file_path = str((workspace / Path(str(file_path)).expanduser()).resolve())
     except ValueError as exc:
         result = make_result(
             status="error",
@@ -589,6 +587,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
         return
 
     if result["status"] == "ok":
@@ -599,4 +599,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

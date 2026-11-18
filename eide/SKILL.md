@@ -16,6 +16,10 @@ argument-hint: "[scan|configs|build|rebuild|clean|size] ..."
 
 EIDE 是 VS Code 下的嵌入式开发扩展，使用 ARM CC (AC5/AC6) 或 GCC 工具链，通过 `unify_builder` 统一构建后端驱动。
 
+## 运行依赖
+
+Python 3.10+、PyYAML、当前系统对应的 EIDE unify_builder 与工程编译器。大小分析需要 ARM size 工具。
+
 ## 配置
 
 ### 环境级配置（skill/config.json）
@@ -60,10 +64,11 @@ skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `
 
 参数解析顺序（从高到低）：
 1. CLI 显式参数
-2. 环境级配置（skill/config.json）
-3. 工程级配置（.embeddedskills/config.json）
-4. `.embeddedskills/state.json`（上次构建记录）
-5. 搜索/询问
+2. 工程级配置（.embeddedskills/config.json）
+3. `.embeddedskills/state/eide.json`（上次构建记录）
+4. 搜索/询问
+
+工具路径依次读取 CLI、本机配置和 PATH。
 
 ## 子命令
 

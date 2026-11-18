@@ -6,12 +6,16 @@ description: >-
   串口监控、查看 MCU 输出、二进制协议联调时自动触发，也兼容 /serial 显式调用。
   即使用户只是说"看看串口输出"、"发个 AT 命令"或"抓一下日志"，只要上下文涉及
   串口通信就应触发此 skill。
-argument-hint: "[scan|monitor|send|hex|log] ..."
+argument-hint: "[scan|monitor|send|hex|log|mux] ..."
 ---
 
 # Serial — 嵌入式串口调试工具
 
 统一封装端口发现、实时监控、数据发送、日志记录和 Hex 查看能力。
+
+## 运行依赖
+
+Windows 或 Linux，Python 3.10+ 和 pyserial。mux 需要 Linux、socat 和 PTY。
 
 ## 配置
 
@@ -53,7 +57,7 @@ serial skill 的环境级配置目前为空对象 `{}`，因为串口参数属�
 
 1. **CLI 参数** (`--port`, `--baudrate` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `serial` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/serial.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 ### 自动扫描行为
@@ -200,7 +204,7 @@ python scripts/serial_mux.py stop
 
 ### Mux 状态持久化
 
-mux 进程 PID 保存到 `.embeddedskills/state.json` 的 `serial_mux` 段。脚本退出后下次调用 `status` 会检测进程是否仍存活，自动清理僵尸 PID。`start` 成功后会把已确认的串口配置写回 `.embeddedskills/config.json`，方便后续无参命令复用。`stop` 命令会终止 mux 与 socat PTY 进程，并删除残留的 `/tmp/serial_mux_vserial` 符号链接。
+mux 进程 PID 保存到 `.embeddedskills/state/serial.json` 的 `serial_mux` 段。脚本退出后下次调用 `status` 会检测进程是否仍存活，自动清理僵尸 PID。`start` 成功后会把已确认的串口配置写回 `.embeddedskills/config.json`，方便后续无参命令复用。`stop` 命令会终止 mux 与 socat PTY 进程，并删除残留的 `/tmp/serial_mux_vserial` 符号链接。
 
 ## 核心规则
 

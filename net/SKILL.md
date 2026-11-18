@@ -14,6 +14,10 @@ argument-hint: "[iface|capture|analyze|ping|scan|stats] ..."
 
 嵌入式网络通信调试工具，统一封装接口发现、抓包、离线分析、连通性测试、端口扫描和流量统计能力。
 
+## 运行依赖
+
+Windows 或 Linux，Python 3.10+。抓包和分析需要 Wireshark CLI 与对应权限；Linux 网络诊断按命令需要 iproute2、iputils-ping 和 traceroute。
+
 ## 脚本与配置路径
 
 - 脚本目录: `<skill-dir>/scripts/`
@@ -68,7 +72,7 @@ argument-hint: "[iface|capture|analyze|ping|scan|stats] ..."
 
 1. **CLI 参数** (`--interface`, `--target` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `net` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/net.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 连接和采集参数按优先级解析，脚本通过 CLI 参数接收覆盖值。若配置缺少必要项或连接失败，询问用户并引导修改配置。

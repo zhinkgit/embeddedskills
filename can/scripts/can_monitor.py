@@ -1,7 +1,5 @@
 """CAN 总线监控：持续读取报文，支持过滤、DBC 解码和 CAN-FD"""
 
-import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -12,6 +10,9 @@ from can_runtime import (
     open_can_bus,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_event,
 )
 
 
@@ -28,9 +29,7 @@ def parse_id_list(s):
 
 
 def output_json_line(obj):
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
+    output_event(obj, "frame")
 
 
 def format_data(data):
@@ -38,7 +37,7 @@ def format_data(data):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CAN 总线实时监控")
+    parser = ArgumentParser(description="CAN 总线实时监控")
     add_can_connection_args(parser, include_data_bitrate=True)
     parser.add_argument("--fd", action="store_true", help="启用 CAN-FD 模式")
     parser.add_argument("--filter-id", help="只显示指定 ID（逗号分隔）")
@@ -196,4 +195,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

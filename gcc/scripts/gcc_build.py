@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shutil
@@ -11,10 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from gcc_runtime import (  # noqa: E402
     build_artifacts,
@@ -36,6 +31,8 @@ from gcc_runtime import (  # noqa: E402
     save_project_config,
     update_state_entry,
     workspace_root,
+    ArgumentParser,
+    run_cli,
 )
 
 
@@ -369,7 +366,7 @@ def run_rebuild(cmake_exe: str, project: str, preset: str, log_dir: str) -> dict
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="GCC 嵌入式工程构建")
+    parser = ArgumentParser(description="GCC 嵌入式工程构建")
     parser.add_argument("action", choices=["configure", "build", "rebuild", "clean"])
     parser.add_argument("--cmake", default=None, help="cmake 可执行文件路径")
     parser.add_argument("--project", default=None, help="工程根目录")
@@ -403,12 +400,10 @@ def main() -> None:
             cmake_exe = "cmake"
             parameter_sources["cmake"] = "default:path:cmake"
         
-        # project: CLI > 环境级配置 > 工程级配置 > state.json > 必需
+        # project: CLI > 工程级配置 > 本技能状态文件 > 必需
         project, parameter_sources["project"] = resolve_param(
             "project",
             args.project,
-            config=local_config,
-            config_keys=["default_project"],
         )
         if not is_missing(project):
             project = _resolve_project_path(workspace, str(project))
@@ -423,12 +418,10 @@ def main() -> None:
         if is_missing(project):
             raise ValueError("缺少必要参数: project")
         
-        # preset: CLI > 环境级配置 > 工程级配置 > state.json > 必需
+        # preset: CLI > 工程级配置 > 本技能状态文件 > 必需
         preset, parameter_sources["preset"] = resolve_param(
             "preset",
             args.preset,
-            config=local_config,
-            config_keys=["default_preset"],
         )
         # 工程级配置（优先于 state）
         if is_missing(preset) and not is_missing(project_config.get("preset")):
@@ -559,6 +552,8 @@ def main() -> None:
 
     if args.as_json:
         output_json(result)
+        if result["status"] == "error":
+            sys.exit(1)
         return
 
     if result["status"] == "ok":
@@ -576,4 +571,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

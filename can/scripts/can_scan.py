@@ -1,20 +1,18 @@
 """CAN 接口扫描：区分检测到的设备与已注册的软件后端。"""
 
-import argparse
-import json
 import sys
 
-from can_runtime import list_registered_backends, scan_can_interfaces
-
-
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
+from can_runtime import (
+    list_registered_backends,
+    scan_can_interfaces,
+    ArgumentParser,
+    run_cli,
+    output_json,
+)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="扫描可用 CAN 接口")
+    parser = ArgumentParser(description="扫描可用 CAN 接口")
     parser.add_argument("--json", action="store_true", help="JSON 输出")
     args = parser.parse_args()
 
@@ -50,4 +48,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

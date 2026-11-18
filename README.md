@@ -105,12 +105,11 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔬 调试 | **jlink** | 烧录、读写内存/寄存器、RTT/SWO、GDB 调试 | `flash` `read-mem` `write-mem` `regs` `rtt` `swo` + GDB |
 | 🔬 调试 | **openocd** | 烧录、擦除、GDB/Telnet、Semihosting/ITM | `flash` `erase` `reset` `gdb-server` `semihosting` `itm` |
 | 🔬 调试 | **probe-rs** | 探针发现、烧录、复位、内存读写、GDB 调试、RTT | `list` `info` `flash` `erase` `reset` `read-mem` `write-mem` `gdb` `rtt` |
-| 🔌 通信 | **serial** | 扫描串口、实时监控、发送数据、Hex 查看 | `scan` `monitor` `send` `hex` `log` |
+| 🔌 通信 | **serial** | 扫描串口、实时监控、发送数据、Hex 查看 | `scan` `monitor` `send` `hex` `log` `mux` |
 | 🔌 通信 | **can** | CAN/CAN-FD 监控、发帧、DBC 解码、统计 | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 通信 | **net** | 抓包分析、连通性测试、端口扫描、流量统计 | `capture` `analyze` `ping` `scan` `stats` |
-| 🔌 通信 | **ssh** | SSH 配置、环境解析、只读探测、远程命令、上传下载、跳板机和端口转发 | `list` `find` `resolve` `show` `add` + exec/probe/transfer/tunnel |
-| 🔌 通信 | **terminal** | 串口、SSH、本地 Shell 双向交互会话 | `start` `send` `read` `attach` `stop` |
-| 🎯 编排 | **workflow** | 自动识别工程 → 选择工具链 → 串联全流程 | `plan` `build` `build-flash` `build-debug` `observe` `diagnose` |
+| 🔌 通信 | **terminal** | Agent 终端，内置 SSH、串口和本地进程 | `exec` `start` `send` `read` `serial` `ssh` |
+| 🎯 规划 | **workflow** | 只读工程发现、命令规划和诊断 | `plan` `diagnose` |
 
 > [!TIP]
 > `Keil / GCC` 与 `J-Link / OpenOCD / probe-rs` 可自由正交组合，六种搭配均可开箱即用。
@@ -138,7 +137,7 @@ npx skills remove -g    # 移除
 
 ```bash
 # Claude Code（全局）
-git clone https://github.com/zhinkgit/embeddedskills ~/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills `/.claude/skills/embeddedskills
 
 # 仅当前项目
 git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskills
@@ -170,7 +169,7 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 <details>
 <summary><b>③ 统一 JSON 输出，驱动下一步决策</b></summary>
 
-所有脚本返回统一结构的 JSON，AI 直接解析状态、摘要和建议，自主决定下一步操作：
+可自动化命令使用 --json 返回统一结构的 JSON，AI 直接解析状态、摘要和建议，自主决定下一步操作：
 
 ```json
 {
@@ -187,13 +186,11 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 
 <br>
 
-**三层配置**，按需覆盖，优先级从高到低：
+**配置来源与解析顺序**
 
 ```
-CLI 参数  ──►  skill/config.json（工具路径、硬件参数）
-          ──►  .embeddedskills/config.json（目标芯片、接口、日志目录）
-          ──►  .embeddedskills/state.json（最近一次构建/烧录/调试记录）
-          ──►  默认值
+工具路径    CLI → skill/config.json → PATH
+工程参数    CLI → .embeddedskills/config.json → .embeddedskills/state/<skill>.json → 发现或默认值
 ```
 
 **统一日志目录：**
@@ -225,7 +222,6 @@ workspace/
 | serial | pyserial · USB 转串口驱动 |
 | can | python-can · cantools · pyserial · USB-CAN 驱动 |
 | net | Wireshark (tshark) · Npcap |
-| ssh | OpenSSH 客户端 (`ssh` / `scp` / `ssh-keygen`) |
 | terminal | pyserial（串口后端）· OpenSSH 客户端（SSH 后端） |
 
 > 除 CAN、串口和 terminal 的串口后端外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
@@ -251,7 +247,6 @@ workspace/
 | serial | ✅ 已完成测试 |
 | net | ✅ 已完成测试 |
 | can | 🔧 待测试 |
-| ssh | ✅ 已完成测试 |
 | terminal | 🔧 待硬件测试 |
 | workflow | ✅ 已完成测试 |
 

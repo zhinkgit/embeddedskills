@@ -1,7 +1,5 @@
 """串口实时文本监控"""
 
-import argparse
-import json
 import re
 import signal
 import sys
@@ -15,16 +13,14 @@ from serial_runtime import (
     save_project_config,
     update_state_entry,
     make_timing,
+    ArgumentParser,
+    run_cli,
+    output_json,
+    output_event,
 )
 
 PARITY_MAP = {"none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
 IDLE_FLUSH_SEC = 0.2
-
-
-def output_json(obj):
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
 
 
 def error_exit(action, code, message, use_json):
@@ -53,7 +49,7 @@ def emit_line(text, cfg, args, include_re, exclude_re):
 
     now = datetime.now().isoformat(timespec="milliseconds")
     if args.json:
-        output_json({"timestamp": now, "port": cfg["port"], "baudrate": cfg["baudrate"], "text": text})
+        output_event({"timestamp": now, "port": cfg["port"], "baudrate": cfg["baudrate"], "text": text}, "data")
     else:
         prefix = f"[{now}] " if args.timestamp else ""
         print(f"{prefix}{text}")
@@ -61,7 +57,7 @@ def emit_line(text, cfg, args, include_re, exclude_re):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="串口实时文本监控")
+    parser = ArgumentParser(description="串口实时文本监控")
     parser.add_argument("--port", help="串口号 (如 COM3)")
     parser.add_argument("--baudrate", type=int, help="波特率")
     parser.add_argument("--bytesize", type=int, help="数据位")
@@ -202,4 +198,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -1,7 +1,5 @@
 """CAN 报文发送：支持标准帧、扩展帧、远程帧、CAN-FD 帧"""
 
-import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -12,6 +10,10 @@ from can_runtime import (
     open_can_bus,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_event,
+    output_json,
 )
 
 
@@ -21,16 +23,8 @@ def parse_hex_data(s):
     return bytes.fromhex(s)
 
 
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
-
-
 def output_json_line(obj):
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
+    output_event(obj, "response")
 
 
 def format_data(data):
@@ -38,7 +32,7 @@ def format_data(data):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CAN 报文发送")
+    parser = ArgumentParser(description="CAN 报文发送")
     add_can_connection_args(parser, include_data_bitrate=True)
     parser.add_argument("id", help="CAN ID（支持 0x 前缀）")
     parser.add_argument("data", help="数据（Hex 字符串，如 'DE AD BE EF'）")
@@ -206,4 +200,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

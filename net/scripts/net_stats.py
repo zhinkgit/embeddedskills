@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """基于 tshark 的流量统计工具，按协议、端点或端口输出。"""
 
-import argparse
 import io
-import json
 import os
 import re
 import subprocess
@@ -19,6 +17,9 @@ from net_runtime import (
     save_project_config,
     update_state_entry,
     check_tshark,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -136,7 +137,7 @@ def parse_endpoints(stdout):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="流量统计")
+    parser = ArgumentParser(description="流量统计")
     parser.add_argument("--interface", "-i", help="抓包接口")
     parser.add_argument("--duration", type=int, help="统计时长(秒)")
     parser.add_argument("--display-filter", "-Y", help="显示过滤器")
@@ -167,7 +168,7 @@ def main():
                 "message": f"未找到 tshark ({exe})，请确认 Wireshark 已安装且已加入 PATH",
             },
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     if not iface:
@@ -176,7 +177,7 @@ def main():
             "action": "stats",
             "error": {"code": "no_interface", "message": "未配置抓包接口，请用 --interface 指定或在 .embeddedskills/config.json 中配置"},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     # 保存确认的配置
@@ -196,7 +197,7 @@ def main():
             "action": "stats",
             "error": {"code": "stats_failed", "message": stderr.strip() or "统计失败"},
         }
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        output_json(error)
         sys.exit(1)
 
     result = {
@@ -226,7 +227,7 @@ def main():
         result["details"]["endpoints"] = endpoints
 
     if args.output_json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        output_json(result)
     else:
         print(f"[net stats] {result['summary'].get('description', '统计完成')}")
         details = result["details"]
@@ -253,4 +254,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

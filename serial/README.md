@@ -57,7 +57,7 @@ serial skill 的环境级配置目前为空对象 `{}`，因为串口参数属�
 
 1. **CLI 参数** (`--port`, `--baudrate` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `serial` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/serial.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 ### 自动扫描行为

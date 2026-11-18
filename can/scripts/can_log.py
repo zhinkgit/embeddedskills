@@ -1,7 +1,5 @@
 """CAN 总线日志记录：保存报文到 ASC / BLF / CSV / LOG 文件"""
 
-import argparse
-import json
 import os
 import sys
 import time
@@ -13,6 +11,9 @@ from can_runtime import (
     open_can_bus,
     save_project_config,
     update_state_entry,
+    ArgumentParser,
+    run_cli,
+    output_json,
 )
 
 
@@ -31,14 +32,8 @@ def format_data(data):
     return " ".join(f"{b:02X}" for b in data)
 
 
-def output_json(result):
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.flush()
-
-
 def main():
-    parser = argparse.ArgumentParser(description="CAN 总线日志记录")
+    parser = ArgumentParser(description="CAN 总线日志记录")
     add_can_connection_args(parser)
     parser.add_argument("--output", "-o", help="输出文件路径（按扩展名选格式：.asc/.blf/.csv/.log）")
     parser.add_argument("--duration", type=float, help="记录时长（秒）")
@@ -188,4 +183,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

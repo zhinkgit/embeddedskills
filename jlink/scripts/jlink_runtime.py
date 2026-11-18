@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 
 STATE_DIR_NAME = ".embeddedskills"
-STATE_FILE_NAME = "state.json"
+STATE_FILE_NAME = Path("state") / "jlink.json"
 PROJECT_CONFIG_FILE_NAME = "config.json"
 SKILL_NAME = "jlink"
 
@@ -77,19 +81,30 @@ def save_project_config(workspace: str | None = None, values: dict | None = None
     project_config_path = ws_root / STATE_DIR_NAME / PROJECT_CONFIG_FILE_NAME
 
     # 读取现有配置（如果存在）
-    full_config = load_json_file(project_config_path)
-    if not isinstance(full_config, dict):
-        full_config = {}
+    with json_write_lock(project_config_path):
+        full_config = load_json_file(project_config_path)
+        if not isinstance(full_config, dict):
+            full_config = {}
 
-    # 只更新本 skill 的配置部分
-    full_config[SKILL_NAME] = {**(full_config.get(SKILL_NAME) or {}), **values}
+        # 只更新本 skill 的配置部分
+        full_config[SKILL_NAME] = {**(full_config.get(SKILL_NAME) or {}), **values}
 
-    save_json_file(project_config_path, full_config)
+        save_json_file(project_config_path, full_config)
 
 
-def output_json(data: dict, *, indent: int = 2) -> None:
-    sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(data, ensure_ascii=False, indent=indent), flush=True)
+def output_json(data: dict, *, indent: int | None = 2, stream=None) -> None:
+    if "status" in data:
+        error = data.get("error") or {}
+        if data["status"] == "error":
+            message = error.get("message") or data.get("summary") or "Command failed"
+            error = {**error, "code": error.get("code") or "command_failed", "message": message}
+            data = {**data, "error": error}
+        data = {**data, "summary": data.get("summary") or error.get("message") or str(data.get("action", SKILL_NAME)),
+                "details": data.get("details") or {}}
+    stream = sys.stdout if stream is None else stream
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8")
+    print(json.dumps(data, ensure_ascii=False, indent=indent), file=stream, flush=True)
 
 
 def is_missing(value: Any) -> bool:
@@ -155,10 +170,43 @@ def load_json_file(path: str | Path) -> dict:
         return {}
 
 
+@contextmanager
+def json_write_lock(path: Path):
+    """Protect a read-modify-write update without locking readers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as lock:
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def save_json_file(path: str | Path, data: dict) -> None:
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=file_path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+        except BaseException:
+            stream.close()
+            temporary.unlink()
+            raise
+    try:
+        for attempt in range(10):
+            try:
+                temporary.replace(file_path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 9:
+                    raise
+                sleep(0.025)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def workspace_root(workspace: str | None = None) -> Path:
@@ -187,9 +235,10 @@ def get_state_entry(state: dict | None, key: str) -> dict:
 
 def update_state_entry(category: str, record: dict, workspace: str | None = None) -> dict:
     ws_root = workspace_root(workspace)
-    state = load_workspace_state(workspace)
-    state[category] = _serialize_state_value({**record, "timestamp": record.get("timestamp") or now_iso()}, ws_root)
-    file_path = save_workspace_state(state, workspace)
+    with json_write_lock(workspace_root(workspace) / STATE_DIR_NAME / STATE_FILE_NAME):
+        state = load_workspace_state(workspace)
+        state[category] = _serialize_state_value({**record, "timestamp": record.get("timestamp") or now_iso()}, ws_root)
+        file_path = save_workspace_state(state, workspace)
     return {
         "workspace": str(ws_root),
         "file": str(file_path),
@@ -301,12 +350,33 @@ def emit_stream_record(*, source: str, channel_type: str, text: str, as_json: bo
             "source": source,
             "channel_type": channel_type,
             "stream_type": stream_type,
+            "event": stream_type,
             "text": text.rstrip("\r\n"),
         }
         if channel is not None:
             record["channel"] = channel
         if extra:
             record.update(compact_dict(extra))
-        print(json.dumps(record, ensure_ascii=False), flush=True)
+        output_json(record, indent=None)
     else:
         print(text, end="" if text.endswith(("\n", "\r")) else "\n", flush=True)
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "--json" in sys.argv[1:]:
+            output_json(make_result(status="error", action=Path(sys.argv[0]).stem, summary=message,
+                                    error={"code": "invalid_arguments", "message": message}))
+            raise SystemExit(2)
+        super().error(message)
+
+
+def run_cli(main) -> None:
+    try:
+        main()
+    except (OSError, ValueError) as exc:
+        if "--json" not in sys.argv[1:]:
+            raise
+        output_json(make_result(status="error", action=Path(sys.argv[0]).stem, summary=str(exc),
+                                error={"code": "command_failed", "message": str(exc)}))
+        raise SystemExit(1) from exc

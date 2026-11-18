@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """网络接口发现工具，可关联 tshark 抓包接口列表。"""
 
-import argparse
-import json
 import subprocess
 import sys
 
-from net_runtime import list_network_interfaces, parse_tshark_interfaces
+from net_runtime import (
+    list_network_interfaces,
+    parse_tshark_interfaces,
+    ArgumentParser,
+    run_cli,
+    output_json,
+)
 
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="列出网络接口")
+    parser = ArgumentParser(description="列出网络接口")
     parser.add_argument("--filter", default="", help="按关键词筛选接口")
     parser.add_argument("--tshark", action="store_true", help="同时显示 tshark 抓包接口")
     parser.add_argument("--json", action="store_true", dest="output_json", help="JSON 输出")
@@ -24,7 +28,7 @@ def main():
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
         result = {"status": "error", "action": "iface", "error": {"code": "interface_scan_failed", "message": str(exc)}}
         if args.output_json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            output_json(result)
         else:
             print(f"网络接口枚举失败: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -58,7 +62,7 @@ def main():
             result["details"]["tshark_interfaces"] = tshark_ifaces
 
     if args.output_json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        output_json(result)
     else:
         print(f"[net iface] {result['summary']}")
         for iface in interfaces:
@@ -88,4 +92,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

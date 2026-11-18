@@ -73,7 +73,7 @@ Claude Code skill，用于嵌入式网络通信调试：接口发现、抓包、
 
 1. **CLI 参数** (`--interface`, `--target` 等) - 最高优先级
 2. **工程级配置** (`.embeddedskills/config.json` 中的 `net` 部分)
-3. **状态文件** (`.embeddedskills/state.json` 中的历史记录)
+3. **状态文件** (`.embeddedskills/state/net.json` 中的历史记录)
 4. **默认值** - 最低优先级
 
 ### 配置写回
