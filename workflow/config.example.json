@@ -1,6 +1,12 @@
 {
-  "preferred_build": "auto",
-  "preferred_flash": "auto",
-  "preferred_debug": "auto",
-  "preferred_observe": "auto"
+  "tools": {
+    "cmake": "cmake",
+    "uv4": "UV4.exe",
+    "unify_builder": "unify_builder",
+    "jlink": "JLinkExe",
+    "jlink_gdb": "JLinkGDBServerCLExe",
+    "openocd": "openocd",
+    "probe_rs": "probe-rs",
+    "gdb": "arm-none-eabi-gdb"
+  }
 }

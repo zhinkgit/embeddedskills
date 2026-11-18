@@ -1,64 +1,29 @@
 # Workflow
 
-`workflow` 是一个薄编排层，只负责：
+Workflow 在 Windows 和 Linux 上用 Python 3.10+ 执行只读规划和诊断。每一步返回可核对的原生工具参数数组，或返回缺项及候选。调用方确认后另行执行相应步骤。
 
-- 发现当前 workspace 中的 Keil / GCC / EIDE 工程
-- 选择构建、烧录、调试、观测后端
-- 串联 `.embeddedskills/state.json`
-- 聚合底层脚本输出
-
-当前 `observe` 阶段会返回 `jlink:rtt`、`jlink:swo`、`openocd:semihosting`、`openocd:itm`、`probe-rs:rtt` 这几类候选观测后端。
-
-它不会重写底层构建器、烧录器或 GDB 解析逻辑。
-
-## 命令
-
-```bash
-python workflow/scripts/workflow_plan.py --json
-python workflow/scripts/workflow_run.py plan --json
-python workflow/scripts/workflow_run.py build --json
-python workflow/scripts/workflow_run.py build-flash --json
-python workflow/scripts/workflow_run.py build-debug --json
-python workflow/scripts/workflow_run.py observe --json
-python workflow/scripts/workflow_run.py diagnose --json
+```console
+python scripts/workflow.py plan --workspace /path/to/project --build-backend gcc --build-profile debug --json
+python scripts/workflow.py diagnose --workspace /path/to/project --json
 ```
 
-## 配置
-
-workflow 不再维护独立的工程配置结构，所有工程参数统一从 `.embeddedskills/config.json` 读取。
-
-### 工程级共享配置
-
-在 `.embeddedskills/config.json` 中，`workflow` 段仅包含首选后端配置：
+工作区 `.embeddedskills/config.json` 示例：
 
 ```json
 {
   "workflow": {
-    "preferred_build": "auto",
-    "preferred_flash": "auto",
-    "preferred_debug": "auto",
-    "preferred_observe": "auto"
-  },
-  "keil": { "project": "...", "target": "..." },
-  "gcc": { "project": "...", "preset": "..." },
-  "eide": { "project": "...", "config": "..." },
-  "jlink": { "device": "...", "interface": "SWD" },
-  "openocd": { "board": "...", "interface": "..." },
-  "probe-rs": { "chip": "...", "protocol": "swd" }
+    "build_backend": "gcc",
+    "flash_backend": "probe-rs",
+    "debug_backend": "probe-rs",
+    "observe_backend": "probe-rs",
+    "gcc": { "project": ".", "preset": "debug" },
+    "probe-rs": { "chip": "STM32F407VGTx", "protocol": "swd" },
+    "firmware": "build/app.hex",
+    "elf": "build/app.elf"
+  }
 }
 ```
 
-### 参数解析顺序
+Keil 可设置 `keil.project` 和 `keil.target`。EIDE 可设置 `eide.project`、`eide.config` 和已生成的 `eide.params_file`。OpenOCD 使用 `openocd.board`，或 `openocd.interface` 与 `openocd.target`。J-Link 烧录使用 `jlink.command_file`，RTT/SWO 观测由 `jlink.observe_argv` 描述对应原生客户端命令。工具路径在 Skill 本机配置的 `tools` 段设置，参见 [配置示例](config.example.json)。
 
-1. **CLI 参数**（如 `--build-backend=keil`）优先级最高
-2. **`.embeddedskills/config.json`** 中的 `workflow` 段配置
-3. **自动发现**（当 `preferred_*` 为 `"auto"` 时）
-
-成功执行后，实际使用的后端会自动写回 `.embeddedskills/config.json` 的 `workflow` 段，供下次使用。
-
-### 与其他 Skill 的协同
-
-workflow 与其他 Skill 的协同只通过以下方式：
-- `.embeddedskills/config.json`：读取各 Skill 的工程配置
-- `.embeddedskills/state.json`：读取/写入运行状态
-- 子进程调用底层 Skill 脚本
+计划输出 `details.steps`。每项通过 `status` 区分 `ready` 和 `blocked`，并提供 `commands` 或 `requires`。调试服务器步骤的 `background: true` 表示调用方应启动服务器、等待其就绪，再运行后续命令。诊断输出 `details.issues`。若有步骤待补齐，总体结果仍表示只读检查请求本身执行成功。
