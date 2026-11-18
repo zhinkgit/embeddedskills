@@ -133,6 +133,7 @@ Skill 的 `description` 字段定义了触发关键词，AI 会自动识别意�
 | "看看串口输出" | `serial` |
 | "单步调试一下" | `openocd` 或 `jlink` |
 | "看看寄存器" | `openocd` 或 `jlink` |
+| "跑一下单元测试 / 串口冒烟" | `verify` |
 | "一键编译烧录调试" | `workflow` |
 
 <br>
@@ -166,8 +167,10 @@ flowchart TD
     C -->|有错误| D["🤖 AI 读取编译错误"]
     D --> B
     C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash"]
-    E --> F["🔬 自动调试验证"]
-    F -->|异常| G["🤖 AI 读取调试信息"]
+    E --> V["🧪 自动测试 verify unit / smoke"]
+    V -->|失败| G["🤖 AI 读取调试/测试信息"]
+    V -->|通过| F["🔬 自动调试与观测"]
+    F -->|异常| G
     G --> B
     F -->|正常| H["✅ 提交最终代码"]
 
@@ -175,12 +178,13 @@ flowchart TD
     style H fill:#4CAF50,color:#fff
     style C fill:#2196F3,color:#fff
     style E fill:#2196F3,color:#fff
+    style V fill:#9C27B0,color:#fff
     style F fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
     style G fill:#f44336,color:#fff
 ```
 
-当调试发现问题时，AI 会自动形成 **读取错误 → 修改代码 → 重新编译 → 重新烧录 → 重新调试** 的闭环，无需人工干预。
+当测试或调试发现问题时，AI 会自动形成 **读取错误 → 修改代码 → 重新编译 → 重新烧录 → 重新测试/调试** 的闭环，无需人工干预。
 
 <br>
 

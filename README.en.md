@@ -38,8 +38,10 @@ flowchart TD
     C -->|Errors| D["🤖 AI Reads Compiler Errors"]
     D --> B
     C -->|Success| E["⚡ Auto Flash openocd flash / jlink flash / probe-rs flash"]
-    E --> F["🔬 Auto Debug & Verify"]
-    F -->|Anomaly| G["🤖 AI Reads Debug Info"]
+    E --> V["🧪 Auto Test verify unit / smoke"]
+    V -->|Failed| G["🤖 AI Reads Debug Info"]
+    V -->|Passed| F["🔬 Auto Debug & Observe"]
+    F -->|Anomaly| G
     G --> B
     F -->|Normal| H["✅ Submit Final Code"]
 
@@ -47,6 +49,7 @@ flowchart TD
     style H fill:#4CAF50,color:#fff
     style C fill:#2196F3,color:#fff
     style E fill:#2196F3,color:#fff
+    style V fill:#9C27B0,color:#fff
     style F fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
     style G fill:#f44336,color:#fff
@@ -57,6 +60,7 @@ flowchart TD
 | Code Writing | AI generates | AI generates |
 | Compile/Build | **Manual** | ✅ AI invokes Keil / GCC |
 | Flash/Download | **Manual** | ✅ AI invokes J-Link / OpenOCD |
+| Automated Testing | **Manual run and judgement** | ✅ AI runs unit tests / serial smoke and decides |
 | Debug/Verify | **Manual** | ✅ AI breakpoints / registers / memory |
 | Communication Debug | **Manual** | ✅ AI serial / CAN / network |
 | Error Fixing | **Manually paste errors to AI** | ✅ AI reads and fixes autonomously |
@@ -86,6 +90,7 @@ No paid subscriptions required for any additional services. Switch AI tools free
 | **Debuggers** | J-Link (SEGGER), CMSIS-DAP / DAPLink |
 | **Flash Frameworks** | OpenOCD, probe-rs compatible toolchain |
 | **Communication Buses** | Serial (UART), CAN / CAN-FD, Ethernet |
+| **Test Loop** | Host unit tests (CTest / pytest), serial black-box smoke |
 
 One-command install, AI automatically detects project type and starts working:
 
@@ -109,6 +114,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔌 Communication | **can** | CAN/CAN-FD monitoring, send frames, DBC decode, statistics | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 Communication | **net** | Packet capture analysis, connectivity test, port scan, traffic stats | `capture` `analyze` `ping` `scan` `stats` |
 | 🔌 Communication | **terminal** | Agent terminal for SSH, serial and local processes | `exec` `start` `send` `read` `serial` `ssh` |
+| 🧪 Verification | **verify** | Host unit tests, serial black-box smoke, JUnit evidence and pass/fail gate | `scan` `unit` `smoke` `run` `report` |
 | 🎯 Planning | **workflow** | Read-only project discovery, planning and diagnostics | `plan` `diagnose` |
 
 > [!TIP]
@@ -202,6 +208,8 @@ Project parameters  CLI → .embeddedskills/config.json → .embeddedskills/stat
 workspace/
 └── .embeddedskills/
     ├── build/          ← Build logs and hex/bin artifacts
+    ├── reports/
+    │   └── verify/     ← Unit/smoke reports and latest.json
     └── logs/
         ├── serial/     ← Serial monitor logs
         ├── can/        ← CAN message logs
@@ -225,9 +233,10 @@ workspace/
 | serial | pyserial · USB-to-serial driver |
 | can | python-can · cantools · pyserial · USB-CAN driver |
 | net | Wireshark (tshark) · Npcap |
+| verify | CTest / pytest for host unit tests · pyserial for serial smoke |
 | terminal | pyserial for serial backend · OpenSSH client for SSH backend |
 
-> Except for CAN, serial, and terminal's serial backend, all Skills are implemented using Python standard library — no additional Python dependencies needed.
+> Except for CAN, serial, verify's serial smoke, and terminal's serial backend, all Skills are implemented using Python standard library — no additional Python dependencies needed.
 
 > [!WARNING]
 > On Windows, using `probe-rs` with `J-Link` typically requires switching the probe driver to `WinUSB`, which can break the official SEGGER tooling. If you still rely on the SEGGER toolchain, prefer the existing `jlink` skill.
@@ -251,6 +260,7 @@ workspace/
 | net | ✅ Tested |
 | can | 🔧 Pending test |
 | terminal | 🔧 Pending hardware test |
+| verify | ✅ Tested |
 | workflow | ✅ Tested |
 
 ---

@@ -28,6 +28,7 @@ ENTRYPOINTS = {
     "probe-rs": ("probe_rs_exec.py", ["list", "--exe", "skill-test-missing", "--json"]),
     "serial": ("serial_send.py", ["--json"]),
     "terminal": ("terminal.py", ["--json", "exec", "local", "--", "skill-test-missing"]),
+    "verify": ("verify.py", ["unit", "--workspace", "missing", "--json"]),
     "workflow": ("workflow.py", ["plan", "--json", "--workspace", "missing"]),
 }
 

@@ -299,6 +299,39 @@ def observe(step, args, config, params, tools, artifacts):
                      "-c", "init; reset halt; arm semihosting enable; resume")
 
 
+def verify_script() -> Path:
+    return Path(__file__).resolve().parents[2] / "verify" / "scripts" / "verify.py"
+
+
+def plan_verify(args, workspace: Path, params: dict) -> dict:
+    step = Step("verify", workspace, "verify", [])
+    action = args.verify_action or params.get("action") or "run"
+    if action not in ("run", "unit", "smoke"):
+        step.need("verify.action 必须为 run、unit 或 smoke")
+        return step.payload()
+    script = verify_script()
+    if not step.file(script, "verify 脚本"):
+        return step.payload()
+    value = args.verify_plan or params.get("plan")
+    plan_path = under(workspace, value) if value else None
+    if plan_path is None:
+        for candidate in (".embeddedskills/verify/plan.json", ".embeddedskills/verify.json", "verify.plan.json"):
+            path = workspace / candidate
+            if path.is_file():
+                plan_path = path
+                break
+    if plan_path is None:
+        step.need("提供 verify 计划（--verify-plan 或 .embeddedskills/config.json 的 verify.plan）")
+        return step.payload()
+    if not step.file(plan_path, "verify 计划"):
+        return step.payload()
+    step.data["action"] = action
+    step.data["plan"] = str(plan_path)
+    step.command(sys.executable, script, action, "--workspace", workspace, "--json", "--plan", plan_path,
+                 cwd=workspace)
+    return step.payload()
+
+
 def plan_probe(stage, args, config, tools, artifacts) -> dict:
     available = [name for name in PROBE_BACKENDS if section(config, name)]
     selected = choose(getattr(args, f"{stage}_backend"), config.get(f"{stage}_backend"), available)
@@ -334,6 +367,8 @@ def main(argv=None) -> int:
     parser.add_argument("--build-backend", choices=(*BUILD_BACKENDS, "auto"))
     for stage in STAGES[1:]:
         parser.add_argument(f"--{stage}-backend", choices=(*PROBE_BACKENDS, "auto"))
+    parser.add_argument("--verify-action", choices=("run", "unit", "smoke"))
+    parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--json", action="store_true")
     try:
         args = parser.parse_args(argv)
@@ -341,11 +376,14 @@ def main(argv=None) -> int:
         args.workspace = args.workspace.resolve(strict=True)
         if not args.workspace.is_dir():
             raise ValueError("工作区应为目录")
-        config = section(read_object(args.workspace / ".embeddedskills" / "config.json"), "workflow")
+        raw_config = read_object(args.workspace / ".embeddedskills" / "config.json")
+        config = section(raw_config, "workflow")
+        verify_config = section(raw_config, "verify")
         tools = section(read_object(Path(__file__).resolve().parents[1] / "config.json"), "tools")
         projects, artifacts = discover(args.workspace)
         steps = [plan_build(args, config, tools, projects)]
         steps.extend(plan_probe(stage, args, config, tools, artifacts) for stage in STAGES[1:])
+        steps.append(plan_verify(args, args.workspace, verify_config))
         details = {"workspace": str(args.workspace),
                    "projects": {name: list(map(str, paths)) for name, paths in projects.items()},
                    "artifacts": list(map(str, artifacts))}

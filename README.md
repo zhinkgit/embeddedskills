@@ -38,8 +38,10 @@ flowchart TD
     C -->|有错误| D["🤖 AI 读取编译错误"]
     D --> B
     C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash / probe-rs flash"]
-    E --> F["🔬 自动调试验证"]
-    F -->|异常| G["🤖 AI 读取调试信息"]
+    E --> V["🧪 自动测试 verify unit / smoke"]
+    V -->|失败| G["🤖 AI 读取调试信息"]
+    V -->|通过| F["🔬 自动调试与观测"]
+    F -->|异常| G
     G --> B
     F -->|正常| H["✅ 提交最终代码"]
 
@@ -47,6 +49,7 @@ flowchart TD
     style H fill:#4CAF50,color:#fff
     style C fill:#2196F3,color:#fff
     style E fill:#2196F3,color:#fff
+    style V fill:#9C27B0,color:#fff
     style F fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
     style G fill:#f44336,color:#fff
@@ -57,6 +60,7 @@ flowchart TD
 | 代码编写 | AI 生成 | AI 生成 |
 | 编译构建 | **人工操作** | ✅ AI 调用 Keil / GCC |
 | 烧录下载 | **人工操作** | ✅ AI 调用 J-Link / OpenOCD |
+| 自动测试 | **人工执行并判断** | ✅ AI 跑单元测试 / 串口冒烟并判定 |
 | 调试验证 | **人工操作** | ✅ AI 断点 / 寄存器 / 内存 |
 | 通信调试 | **人工操作** | ✅ AI 串口 / CAN / 网络 |
 | 错误修正 | **人工转述给 AI** | ✅ AI 读取并自主修正 |
@@ -86,6 +90,7 @@ flowchart TD
 | **调试器** | J-Link（SEGGER）、CMSIS-DAP / DAPLink |
 | **烧录框架** | OpenOCD、probe-rs 兼容工具链 |
 | **通信总线** | 串口（UART）、CAN / CAN-FD、以太网 |
+| **测试闭环** | host 单元测试（CTest / pytest）、串口黑盒冒烟 |
 
 一条命令安装，AI 即可自动识别工程类型并开始工作：
 
@@ -109,6 +114,7 @@ npx skills add https://github.com/zhinkgit/embeddedskills -g -y
 | 🔌 通信 | **can** | CAN/CAN-FD 监控、发帧、DBC 解码、统计 | `scan` `monitor` `send` `decode` `stats` |
 | 🔌 通信 | **net** | 抓包分析、连通性测试、端口扫描、流量统计 | `capture` `analyze` `ping` `scan` `stats` |
 | 🔌 通信 | **terminal** | Agent 终端，内置 SSH、串口和本地进程 | `exec` `start` `send` `read` `serial` `ssh` |
+| 🧪 验证 | **verify** | host 单元测试、串口黑盒冒烟、JUnit 证据与失败判定 | `scan` `unit` `smoke` `run` `report` |
 | 🎯 规划 | **workflow** | 只读工程发现、命令规划和诊断 | `plan` `diagnose` |
 
 > [!TIP]
@@ -199,6 +205,8 @@ git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskil
 workspace/
 └── .embeddedskills/
     ├── build/          ← 编译日志与 hex/bin 产物
+    ├── reports/
+    │   └── verify/     ← 单元/冒烟测试报告与 latest.json
     └── logs/
         ├── serial/     ← 串口监控日志
         ├── can/        ← CAN 报文日志
@@ -222,9 +230,10 @@ workspace/
 | serial | pyserial · USB 转串口驱动 |
 | can | python-can · cantools · pyserial · USB-CAN 驱动 |
 | net | Wireshark (tshark) · Npcap |
+| verify | CTest / pytest（host 单测）· pyserial（串口冒烟） |
 | terminal | pyserial（串口后端）· OpenSSH 客户端（SSH 后端） |
 
-> 除 CAN、串口和 terminal 的串口后端外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
+> 除 CAN、串口、verify 的串口冒烟和 terminal 的串口后端外，所有 Skill 均基于 Python 标准库实现，无需额外安装 Python 依赖。
 
 > [!WARNING]
 > Windows 下若要让 `probe-rs` 驱动 `J-Link`，通常需要把驱动切到 `WinUSB`，这会影响 SEGGER 官方工具继续使用。若你仍依赖 J-Link 官方工具链，优先继续使用现有 `jlink` skill。
@@ -248,6 +257,7 @@ workspace/
 | net | ✅ 已完成测试 |
 | can | 🔧 待测试 |
 | terminal | 🔧 待硬件测试 |
+| verify | ✅ 已完成测试 |
 | workflow | ✅ 已完成测试 |
 
 ---
