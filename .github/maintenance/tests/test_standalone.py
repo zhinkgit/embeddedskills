@@ -51,7 +51,7 @@ class StandaloneTests(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory(prefix="workspace ", dir=self.base)
         self.addCleanup(temporary.cleanup)
-        self.workspace = Path(temporary.name)
+        self.workspace = Path(temporary.name).resolve()
 
     def cli(self, skill, script, *args):
         env = {key: value for key, value in os.environ.items() if not key.upper().startswith("PYTHON")}
@@ -214,7 +214,7 @@ sys.path.insert(0, sys.argv[1])
 import eide_build
 
 def mock_builder(**args):
-    assert args["project"] == str(Path.cwd() / "selected"), args
+    assert Path(args["project"]) == Path.cwd().resolve() / "selected", args
     assert args["config"] == "Selected", args
     return {"status": "error", "error": {"code": "simulated_build_failure", "message": "mock failure"}}
 
@@ -227,6 +227,7 @@ with patch.object(eide_build, "load_local_config", return_value={
         proc = subprocess.run([sys.executable, "-I", "-B", "-c", source, str(self.skills["eide"] / "scripts")],
                               cwd=self.workspace, capture_output=True, encoding="utf-8", timeout=15)
         self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertTrue(proc.stdout, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["error"]["code"], "simulated_build_failure")
 
     def test_skill_states_are_independent(self):
@@ -278,6 +279,8 @@ with patch.object(eide_build, "load_local_config", return_value={
                 token = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"])
                 sid = re.search(rb"S-1-[0-9-]+", token)[0].decode("ascii")
                 subprocess.run(["icacls", str(identity_path), "/inheritance:r", "/grant:r", f"*{sid}:(R,W)"],
+                               check=True, capture_output=True)
+                subprocess.run(["icacls", str(identity_path), "/remove", "*S-1-3-4"],
                                check=True, capture_output=True)
             else:
                 identity_path.chmod(0o600)
