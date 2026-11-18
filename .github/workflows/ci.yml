@@ -30,6 +30,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Validate repository
         run: python .github/maintenance/repo_checks.py
+      - name: Install SSH integration test dependency
+        run: python -m pip install asyncssh==2.24.1
       - name: Run tests
         run: python .github/maintenance/run_tests.py
 
