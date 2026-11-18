@@ -1,0 +1,4 @@
+{
+  "ssh_exe": "ssh",
+  "scp_exe": "scp"
+}

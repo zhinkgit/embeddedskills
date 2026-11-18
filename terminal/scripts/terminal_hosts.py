@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import datetime as _dt
-import json
 import shutil
-import subprocess
-import sys
 from pathlib import Path
+
+from terminal_runtime import TerminalError
 
 
 LIST_METADATA_KEYS = {"aliases", "groups", "tags"}
@@ -252,135 +251,18 @@ def validate_add_arguments(args: argparse.Namespace) -> None:
 def backup_config(path: Path) -> Path | None:
     if not path.exists():
         return None
-    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = path.with_name(f"{path.name}.bak-{stamp}")
     shutil.copy2(path, backup)
     return backup
 
 
-def run_ssh_g(alias: str) -> dict:
-    validate_host_alias(alias)
-    proc = subprocess.run(
-        ["ssh", "-G", "--", alias],
-        text=True,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if proc.returncode != 0:
-        return {"success": False, "stderr": proc.stderr.strip(), "config": {}}
-
-    config: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if " " not in line:
-            continue
-        key, value = line.split(" ", 1)
-        if key in {"hostname", "user", "port", "identityfile", "proxyjump"}:
-            config[key] = value
-    return {"success": True, "stderr": "", "config": config}
-
-
-def cmd_list(_args: argparse.Namespace) -> int:
-    hosts = parse_hosts(read_lines(ssh_config_path()))
-    print(json.dumps({"success": True, "hosts": hosts}, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_find(args: argparse.Namespace) -> int:
-    matches = search_hosts(
-        parse_hosts(read_lines(ssh_config_path())),
-        args.query,
-    )
-    print(json.dumps({
-        "success": True,
-        "query": args.query,
-        "count": len(matches),
-        "hosts": matches,
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_resolve(args: argparse.Namespace) -> int:
-    matches = resolve_hosts(
-        parse_hosts(read_lines(ssh_config_path())),
-        args.query,
-    )
-    if len(matches) == 1:
-        host = matches[0]
-        print(json.dumps({
-            "success": True,
-            "query": args.query,
-            "host": host,
-        }, ensure_ascii=False, indent=2))
-        return 0
-
-    error = "not_found" if not matches else "ambiguous"
-    print(json.dumps({
-        "success": False,
-        "error": error,
-        "query": args.query,
-        "candidates": matches,
-    }, ensure_ascii=False, indent=2), file=sys.stderr)
-    return 1 if error == "not_found" else 2
-
-
-def cmd_show(args: argparse.Namespace) -> int:
-    try:
-        resolved = run_ssh_g(args.alias)
-    except ValueError as exc:
-        print(json.dumps({
-            "success": False,
-            "error": str(exc),
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 2
-    hosts = parse_hosts(read_lines(ssh_config_path()))
+def add_host(args: argparse.Namespace, path: Path) -> dict:
+    validate_add_arguments(args)
     folded_alias = args.alias.casefold()
-    local = next(
-        (
-            host
-            for host in hosts
-            if folded_alias
-            in {item.casefold() for item in concrete_host_patterns(host)}
-        ),
-        None,
-    )
-    result = {
-        "success": bool(resolved["success"] and local),
-        "alias": args.alias,
-        "defined": local is not None,
-        "metadata": local.get("metadata", {}) if local else {},
-        "options": local.get("options", {}) if local else {},
-        "resolved": resolved["config"],
-        "stderr": resolved["stderr"],
-    }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["success"] else 1
-
-
-def cmd_add(args: argparse.Namespace) -> int:
-    try:
-        validate_add_arguments(args)
-    except ValueError as exc:
-        print(json.dumps({
-            "success": False,
-            "error": str(exc),
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 2
-
-    path = ssh_config_path()
+    if any(folded_alias == item.casefold() for host in parse_hosts(read_lines(path)) for item in concrete_host_patterns(host)):
+        raise TerminalError("duplicate_alias", f"Host 别名已存在：{args.alias}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    hosts = parse_hosts(read_lines(path))
-    folded_alias = args.alias.casefold()
-    if any(
-        folded_alias in {item.casefold() for item in concrete_host_patterns(host)}
-        for host in hosts
-    ):
-        print(json.dumps({
-            "success": False,
-            "error": f"Host alias already exists: {args.alias}",
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-
     backup = backup_config(path)
     tags = args.tags or ""
     block: list[str] = []
@@ -411,51 +293,4 @@ def cmd_add(args: argparse.Namespace) -> int:
         f.write("\n".join(block))
         f.write("\n")
 
-    print(json.dumps({
-        "success": True,
-        "alias": args.alias,
-        "config_path": str(path),
-        "backup_path": str(backup) if backup else None,
-    }, ensure_ascii=False, indent=2))
-    return 0
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Manage OpenSSH config hosts")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    p_list = sub.add_parser("list")
-    p_list.set_defaults(func=cmd_list)
-
-    p_find = sub.add_parser("find", aliases=["search"])
-    p_find.add_argument("query", nargs="+")
-    p_find.set_defaults(func=cmd_find)
-
-    p_resolve = sub.add_parser("resolve")
-    p_resolve.add_argument("query", nargs="+")
-    p_resolve.set_defaults(func=cmd_resolve)
-
-    p_show = sub.add_parser("show")
-    p_show.add_argument("alias")
-    p_show.set_defaults(func=cmd_show)
-
-    p_add = sub.add_parser("add")
-    p_add.add_argument("alias")
-    p_add.add_argument("--host", required=True)
-    p_add.add_argument("--user", required=True)
-    p_add.add_argument("--port", default="22")
-    p_add.add_argument("--key")
-    p_add.add_argument("--proxy-jump")
-    p_add.add_argument("--description")
-    p_add.add_argument("--aliases")
-    p_add.add_argument("--groups")
-    p_add.add_argument("--tags")
-    p_add.add_argument("--location")
-    p_add.set_defaults(func=cmd_add)
-
-    args = parser.parse_args()
-    return args.func(args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return {"alias": args.alias, "config_path": str(path), "backup_path": str(backup) if backup else None}

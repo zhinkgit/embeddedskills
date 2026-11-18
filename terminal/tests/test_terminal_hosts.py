@@ -1,19 +1,17 @@
 import argparse
-import contextlib
-import io
 import unittest
 
 from pathlib import Path
 import sys
 import tempfile
-from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from ssh_config import (  # noqa: E402
-    cmd_add,
+from terminal_runtime import TerminalError
+from terminal_hosts import (  # noqa: E402
+    add_host,
     concrete_host_patterns,
     format_config_value,
     parse_hosts,
@@ -205,11 +203,7 @@ User ubuntu
                 groups="test environment",
                 tags="gpu,linux",
             )
-            with (
-                mock.patch("ssh_config.ssh_config_path", return_value=config_path),
-                contextlib.redirect_stdout(io.StringIO()),
-            ):
-                self.assertEqual(cmd_add(args), 0)
+            self.assertEqual(add_host(args, config_path)["alias"], "test-gpu")
 
             hosts = parse_hosts(config_path.read_text(encoding="utf-8").splitlines())
             self.assertEqual(len(hosts), 1)
@@ -223,12 +217,19 @@ User ubuntu
             config_path = Path(directory) / "config"
             original = "Host Test-GPU\n    HostName 192.0.2.10\n"
             config_path.write_text(original, encoding="utf-8")
-            with (
-                mock.patch("ssh_config.ssh_config_path", return_value=config_path),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                self.assertEqual(cmd_add(add_arguments(alias="test-gpu")), 1)
+            with self.assertRaises(TerminalError) as error:
+                add_host(add_arguments(alias="test-gpu"), config_path)
+            self.assertEqual(error.exception.code, "duplicate_alias")
             self.assertEqual(config_path.read_text(encoding="utf-8"), original)
+
+    def test_add_backs_up_an_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config"
+            original = "Host original\n    HostName 192.0.2.10\n"
+            config_path.write_text(original, encoding="utf-8")
+            result = add_host(add_arguments(), config_path)
+            self.assertEqual(Path(result["backup_path"]).read_text(encoding="utf-8"), original)
+            self.assertEqual(len(parse_hosts(config_path.read_text(encoding="utf-8").splitlines())), 2)
 
 
 if __name__ == "__main__":
