@@ -133,6 +133,7 @@ The Skill's `description` field defines trigger keywords. The AI automatically r
 | "Check serial output" | `serial` |
 | "Step through debugging" | `openocd` or `jlink` |
 | "Look at registers" | `openocd` or `jlink` |
+| "Run unit tests / serial smoke" | `verify` |
 | "One-click compile, flash, and debug" | `workflow` |
 
 <br>
@@ -166,8 +167,10 @@ flowchart TD
     C -->|Errors| D["🤖 AI Reads Compiler Errors"]
     D --> B
     C -->|Success| E["⚡ Auto Flash openocd flash / jlink flash"]
-    E --> F["🔬 Auto Debug & Verify"]
-    F -->|Anomaly| G["🤖 AI Reads Debug Info"]
+    E --> V["🧪 Auto Test verify unit / smoke"]
+    V -->|Failed| G["🤖 AI Reads Debug/Test Info"]
+    V -->|Passed| F["🔬 Auto Debug & Observe"]
+    F -->|Anomaly| G
     G --> B
     F -->|Normal| H["✅ Submit Final Code"]
 
@@ -175,12 +178,13 @@ flowchart TD
     style H fill:#4CAF50,color:#fff
     style C fill:#2196F3,color:#fff
     style E fill:#2196F3,color:#fff
+    style V fill:#9C27B0,color:#fff
     style F fill:#FF9800,color:#fff
     style D fill:#f44336,color:#fff
     style G fill:#f44336,color:#fff
 ```
 
-When debugging reveals issues, the AI automatically forms a closed loop of **read error → modify code → recompile → reflash → redebug** without human intervention.
+When testing or debugging reveals issues, the AI automatically forms a closed loop of **read error → modify code → recompile → reflash → retest/redebug** without human intervention.
 
 <br>
 
