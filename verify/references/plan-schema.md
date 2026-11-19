@@ -79,8 +79,11 @@ openocd；有 `probe-rs.chip` 用 probe-rs。都推断不出且没有自定义�
 |------|------|------|
 | `name` | string | 必填，非空且全局唯一 |
 | `description` | string | 可选说明 |
-| `timeout_sec` | number | 可选，整个用例的超时 |
+| `timeout_sec` | number | 可选，整个用例的超时（硬上限，会截短后续阻塞步骤） |
 | `steps` | object[] | 必填，非空步骤数组 |
+
+`timeout_sec` 是整个用例的硬上限：`sleep`、`delay_ms`、`serial_expect` 和 `run`
+都会按剩余时间截短；耗尽后该用例以“用例超时”失败，而不是等完整步骤结束。
 
 ### step
 
@@ -92,7 +95,8 @@ openocd；有 `probe-rs.chip` 用 probe-rs。都推断不出且没有自定义�
 { "reset": { "backend": "jlink", "device": "STM32F407VG", "wait_ms": 500 } }
 ```
 
-空对象 `{ "reset": {} }` 表示使用 `smoke.reset` 的默认配置。
+空对象 `{ "reset": {} }` 表示使用 `smoke.reset` 的默认配置。步骤内显式
+`wait_ms: 0` 表示复位后不等待，不会再回退到 `smoke.reset.wait_ms`。
 
 #### `sleep`
 
@@ -125,7 +129,8 @@ openocd；有 `probe-rs.chip` 用 probe-rs。都推断不出且没有自定义�
 { "serial_expect": { "regex": "(?i)ready|boot ok", "timeout_sec": 3 } }
 ```
 
-`regex` 与 `contains` 二选一；`contains` 会做正则转义。超时会失败，并在错误里带上
+`regex` 与 `contains` 二选一；`contains` 会做正则转义。可选的 `encoding`
+覆盖串口默认编码，适合按 ISO-8859-1 等协议读取设备输出。超时会失败，并在错误里带上
 已收到的最后 1000 字符，便于判断是没输出、波特率错还是断言错。
 
 #### `serial_flush`
@@ -148,6 +153,9 @@ openocd；有 `probe-rs.chip` 用 probe-rs。都推断不出且没有自定义�
 | `timeout_sec` | number | 无 | 超时 |
 | `expect_exit_code` | int | `0` | 期望退出码 |
 | `cwd` | string | 工作区根 | 工作目录 |
+
+命令不存在或超时属于基础设施错误，分别返回 `command_not_found` / `timeout`，
+不会记成普通断言失败；用例 `timeout_sec` 到期导致的截短仍记为该用例超时。
 
 ## 执行语义
 

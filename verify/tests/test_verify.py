@@ -568,6 +568,134 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["action"], "report")
             self.assertEqual(payload["details"]["action"], "unit")
 
+    def test_infrastructure_failure_still_writes_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_plan(root, smoke_plan([{"name": "boot", "steps": [{"sleep": {"ms": 1}}]}]))
+            code, output = self._call(["smoke", "--workspace", directory, "--json"])
+            self.assertEqual(code, 1)
+            payload = json.loads(output)
+            self.assertEqual(payload["status"], "error")
+            state = json.loads((root / ".embeddedskills" / "state" / "verify.json").read_text(encoding="utf-8"))
+            self.assertFalse(state["last_verify"]["passed"])
+
+    def test_unit_summary_failure_is_string(self) -> None:
+        summary = verify._unit_summary(
+            {
+                "passed": False,
+                "exit_code": 1,
+                "junit": {"available": True},
+                "totals": {"tests": 2, "failed": 1, "errors": 1, "skipped": 0},
+            }
+        )
+        self.assertIsInstance(summary, str)
+        self.assertIn("1 失败", summary)
+
+    def test_write_report_names_are_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = write_report(str(root), {"run": 1}, prefix="run")
+            second = write_report(str(root), {"run": 2}, prefix="run")
+            self.assertNotEqual(first["report"], second["report"])
+            self.assertEqual(len(list((root / ".embeddedskills" / "reports" / "verify").glob("run-*.json"))), 2)
+
+
+class SmokeDeadlineTests(unittest.TestCase):
+    def test_explicit_zero_reset_wait_skips_smoke_default(self) -> None:
+        plan = smoke_plan([{"name": "boot", "steps": [{"reset": {"wait_ms": 0}}]}])
+        plan["smoke"]["reset"] = {"wait_ms": 1000}
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "verify_runners._run_reset", return_value="ok"
+        ), mock.patch("verify_runners.time.sleep") as sleep_mock:
+            result = execute_smoke(plan, directory, transport_factory=lambda config: FakeTransport(config))
+            self.assertTrue(result["passed"])
+            sleep_mock.assert_not_called()
+
+    def test_serial_expect_uses_step_encoding(self) -> None:
+        class EncodingTransport(FakeTransport):
+            encodings: list[str]
+
+            def __init__(self, config: dict):
+                super().__init__(config)
+                self.encodings = []
+
+            def read_until(self, pattern, timeout_sec: float, encoding: str):
+                self.encodings.append(encoding)
+                return super().read_until(pattern, timeout_sec, encoding)
+
+        plan = smoke_plan(
+            [{"name": "boot", "steps": [{"serial_expect": {"contains": "OK", "encoding": "latin-1"}}]}]
+        )
+        transport = EncodingTransport({})
+        with tempfile.TemporaryDirectory() as directory:
+            execute_smoke(plan, directory, transport_factory=lambda config: transport)
+        self.assertEqual(transport.encodings[-1], "latin-1")
+
+    def test_flush_failure_is_not_swallowed(self) -> None:
+        class FailingFlush(FakeTransport):
+            def flush_input(self) -> None:
+                raise RunnerError("flush boom")
+
+        plan = smoke_plan([{"name": "boot", "steps": [{"serial_flush": {}}]}])
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(RunnerError):
+            execute_smoke(plan, directory, transport_factory=lambda config: FailingFlush(config))
+
+    def test_smoke_run_missing_command_preserves_code(self) -> None:
+        plan = smoke_plan(
+            [{"name": "boot", "steps": [{"run": {"command": ["definitely-not-a-real-command-xyz"]}}]}]
+        )
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(RunnerError) as raised:
+            execute_smoke(plan, directory, transport_factory=lambda config: FakeTransport(config))
+        self.assertEqual(raised.exception.code, "command_not_found")
+
+    def test_case_timeout_bounds_sleep(self) -> None:
+        plan = smoke_plan([{"name": "boot", "timeout_sec": 0.05, "steps": [{"sleep": {"seconds": 10}}]}])
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "verify_runners.time.sleep"
+        ) as sleep_mock:
+            result = execute_smoke(plan, directory, transport_factory=lambda config: FakeTransport(config))
+        self.assertFalse(result["passed"])
+        self.assertIn("用例超时", result["cases"][0]["error"])
+        self.assertLessEqual(sleep_mock.call_args[0][0], 0.1)
+
+    def test_case_timeout_caps_serial_expect(self) -> None:
+        class TimeoutTransport(FakeTransport):
+            timeouts: list[float]
+
+            def __init__(self, config: dict):
+                super().__init__(config)
+                self.timeouts = []
+
+            def read_until(self, pattern, timeout_sec: float, encoding: str):
+                self.timeouts.append(timeout_sec)
+                return False, "", ""
+
+        plan = smoke_plan(
+            [
+                {
+                    "name": "boot",
+                    "timeout_sec": 0.05,
+                    "steps": [{"serial_expect": {"contains": "OK", "timeout_sec": 10}}],
+                }
+            ]
+        )
+        transport = TimeoutTransport({})
+        with tempfile.TemporaryDirectory() as directory:
+            result = execute_smoke(plan, directory, transport_factory=lambda config: transport)
+        self.assertFalse(result["passed"])
+        self.assertIn("用例超时", result["cases"][0]["error"])
+        self.assertLessEqual(transport.timeouts[-1], 0.1)
+
+    def test_scan_workspace_uses_configured_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            custom = root / "custom" / "my-plan.json"
+            custom.parent.mkdir(parents=True)
+            custom.write_text(json.dumps(smoke_plan([])), encoding="utf-8")
+            write_config(root, {"verify": {"plan": "custom/my-plan.json"}})
+            scan = scan_workspace(root)
+            self.assertEqual(Path(scan["plan"]).resolve(), custom.resolve())
+
 
 if __name__ == "__main__":
     unittest.main()

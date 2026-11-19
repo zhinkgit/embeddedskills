@@ -324,8 +324,12 @@ def write_report(workspace: str | None, report: dict, *, prefix: str = "run") ->
     """写入带时间戳的报告和 latest.json，返回产物路径。"""
     directory = report_dir(workspace)
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     timestamped = directory / f"{prefix}-{stamp}.json"
+    counter = 1
+    while timestamped.exists():
+        timestamped = directory / f"{prefix}-{stamp}-{counter}.json"
+        counter += 1
     latest = directory / "latest.json"
     save_json_file(timestamped, report)
     save_json_file(latest, report)

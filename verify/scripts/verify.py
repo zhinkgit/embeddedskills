@@ -323,6 +323,23 @@ def print_human(result: dict) -> None:
         print(f"  error: {error.get('code')}: {error.get('message')}")
 
 
+def _persist_failure(result: dict, workspace: Path) -> None:
+    """执行期基础设施失败也要留下报告与 last_verify，避免诊断看到旧结果。"""
+    if not workspace.is_dir():
+        return
+    try:
+        _write_evidence(
+            action=str(result.get("action") or ""),
+            result=result,
+            workspace=workspace,
+            passed=False,
+            totals=result.get("metrics") or {},
+        )
+    except Exception:
+        # 证据写失败不应覆盖原始错误。
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     raw_args = list(sys.argv[1:] if argv is None else argv)
@@ -399,6 +416,13 @@ def main(argv: list[str] | None = None) -> int:
             timing=make_timing(started_at, (time.monotonic() - started) * 1000),
             error={"code": "internal_error", "message": str(exc)},
         )
+
+    if result.get("error") and (result["error"] or {}).get("code") not in {
+        "config_invalid",
+        "plan_invalid",
+        "invalid_arguments",
+    }:
+        _persist_failure(result, workspace)
 
     if args.json:
         output_json(result)

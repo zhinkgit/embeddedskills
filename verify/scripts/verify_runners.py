@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import re
 import shutil
@@ -28,6 +29,7 @@ from verify_runtime import (
     load_full_project_config,
     load_workspace_state,
     report_dir,
+    resolve_plan_path,
     run_process,
     tail,
     workspace_root,
@@ -270,14 +272,15 @@ class SerialTransport:
             raise RunnerError("串口尚未打开")
         try:
             self.ser.reset_input_buffer()
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RunnerError(f"串口清空输入失败（{exc}）") from exc
 
     def read_until(self, pattern: re.Pattern, timeout_sec: float, encoding: str) -> tuple[bool, str, str]:
         if self.ser is None:
             raise RunnerError("串口尚未打开")
         deadline = time.monotonic() + timeout_sec
         buffer = ""
+        decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
         while time.monotonic() < deadline:
             try:
                 waiting = int(getattr(self.ser, "in_waiting", 0) or 0)
@@ -285,12 +288,13 @@ class SerialTransport:
             except Exception as exc:
                 raise RunnerError(f"串口读取失败（{exc}）") from exc
             if chunk:
-                buffer += chunk.decode(encoding, errors="replace")
+                buffer += decoder.decode(chunk)
                 match = pattern.search(buffer)
                 if match:
                     return True, buffer, match.group(0)
             else:
                 time.sleep(0.01)
+        buffer += decoder.decode(b"", final=True)
         match = pattern.search(buffer)
         if match:
             return True, buffer, match.group(0)
@@ -377,11 +381,11 @@ def build_reset_command(step: dict, smoke_reset: dict, workspace: Path, full_con
     raise RunnerError(f"不支持的 reset backend：{backend}")
 
 
-def _run_reset(step: dict, smoke_reset: dict, workspace: Path, full_config: dict) -> str:
+def _run_reset(step: dict, smoke_reset: dict, workspace: Path, full_config: dict, timeout_sec: float = 30) -> str:
     command = build_reset_command(step, smoke_reset, workspace, full_config)
     if command is None:
         return "skipped"
-    result = run_process(command, cwd=workspace, timeout_sec=30)
+    result = run_process(command, cwd=workspace, timeout_sec=timeout_sec)
     if result.get("error"):
         if (result["error"] or {}).get("code") == "command_not_found":
             raise RunnerError(result["error"]["message"])
@@ -430,6 +434,37 @@ def _step_label(step_type: str, step: dict) -> str:
     if step_type == "run":
         return "run " + " ".join(step.get("command") or [])
     return step_type
+
+
+def _reset_wait_ms(step: dict, smoke_reset: dict) -> int:
+    """区分显式 wait_ms=0 与未配置；0 表示不复位后等待。"""
+    if "wait_ms" in step:
+        return int(step["wait_ms"])
+    return int(smoke_reset.get("wait_ms") or 0)
+
+
+def _effective_timeout(requested: float | None, case_deadline: float | None) -> tuple[float | None, bool]:
+    """返回 (实际超时, 是否被用例剩余时间截短)。"""
+    if case_deadline is None:
+        return requested, False
+    remaining = case_deadline - time.time()
+    if remaining <= 0:
+        return 0.0, True
+    if requested is None:
+        return remaining, True
+    if requested > remaining:
+        return remaining, True
+    return requested, False
+
+
+def _sleep_with_deadline(seconds: float, case_deadline: float | None, case: dict) -> None:
+    if seconds <= 0:
+        return
+    remaining = case_deadline - time.time() if case_deadline is not None else None
+    if remaining is not None and seconds > remaining:
+        time.sleep(max(0.0, remaining))
+        raise StepFailure(f"用例超时（{case.get('timeout_sec')}s）")
+    time.sleep(seconds)
 
 
 def execute_smoke(
@@ -495,23 +530,33 @@ def execute_smoke(
             case_deadline = case_started + float(case.get("timeout_sec") or 0) if case.get("timeout_sec") else None
             try:
                 for step in case.get("steps") or []:
+                    if case_deadline is not None and time.time() >= case_deadline:
+                        raise StepFailure(f"用例超时（{case.get('timeout_sec')}s）")
                     step_type = next(iter(step))
                     payload = step[step_type] or {}
                     step_started = time.time()
                     step_record = {"type": step_type, "status": "passed", "duration_ms": 0, "detail": {}}
                     try:
                         if step_type == "reset":
-                            _run_reset(payload, smoke_reset, root, full_config)
-                            wait_ms = int(payload.get("wait_ms") or smoke_reset.get("wait_ms") or 0)
-                            if wait_ms:
-                                time.sleep(wait_ms / 1000)
+                            reset_timeout, _ = _effective_timeout(30.0, case_deadline)
+                            if reset_timeout is not None and reset_timeout <= 0:
+                                raise StepFailure(f"用例超时（{case.get('timeout_sec')}s）")
+                            _run_reset(
+                                payload,
+                                smoke_reset,
+                                root,
+                                full_config,
+                                timeout_sec=reset_timeout if reset_timeout is not None else 30.0,
+                            )
+                            wait_ms = _reset_wait_ms(payload, smoke_reset)
+                            _sleep_with_deadline(wait_ms / 1000, case_deadline, case)
                             log_parts.append("[reset] ok")
                             step_record["detail"] = {"backend": payload.get("backend") or smoke_reset.get("backend") or "auto"}
                         elif step_type == "sleep":
                             ms = payload.get("ms")
                             seconds = payload.get("seconds")
                             duration = (float(seconds) if seconds is not None else float(ms or 0) / 1000)
-                            time.sleep(duration)
+                            _sleep_with_deadline(duration, case_deadline, case)
                             log_parts.append(f"[sleep] {duration:.3f}s")
                         elif step_type == "serial_send":
                             payload_bytes = _build_send_payload(payload, settings.get("encoding", "utf-8"))
@@ -519,19 +564,22 @@ def execute_smoke(
                             log_parts.append(f"[send] {payload_bytes!r}")
                             step_record["detail"] = {"bytes": len(payload_bytes)}
                             delay_ms = int(payload.get("delay_ms") or 0)
-                            if delay_ms:
-                                time.sleep(delay_ms / 1000)
+                            _sleep_with_deadline(delay_ms / 1000, case_deadline, case)
                         elif step_type == "serial_flush":
                             transport.flush_input()
                             log_parts.append("[flush]")
                         elif step_type == "serial_expect":
                             pattern_text = payload.get("regex") or payload.get("contains")
                             pattern = re.compile(pattern_text) if payload.get("regex") else re.compile(re.escape(pattern_text))
-                            timeout = float(payload.get("timeout_sec") or 5.0)
-                            matched, buffer, matched_text = transport.read_until(pattern, timeout, settings.get("encoding", "utf-8"))
+                            requested_timeout = float(payload.get("timeout_sec") or 5.0)
+                            timeout, capped = _effective_timeout(requested_timeout, case_deadline)
+                            encoding = payload.get("encoding") or settings.get("encoding", "utf-8")
+                            matched, buffer, matched_text = transport.read_until(pattern, timeout or 0.0, encoding)
                             if not matched:
+                                if capped:
+                                    raise StepFailure(f"用例超时（{case.get('timeout_sec')}s）")
                                 raise StepFailure(
-                                    f"等待串口输出超时（{timeout:.1f}s）：{pattern_text}；已收到：{buffer[-1000:]!r}",
+                                    f"等待串口输出超时（{requested_timeout:.1f}s）：{pattern_text}；已收到：{buffer[-1000:]!r}",
                                     {"received": buffer[-2000:]},
                                 )
                             log_parts.append(f"[expect] {matched_text!r}")
@@ -542,9 +590,18 @@ def execute_smoke(
                             if not cwd.is_absolute():
                                 cwd = root / cwd
                             expected = int(payload.get("expect_exit_code", 0))
-                            result = run_process(command, cwd=cwd, timeout_sec=payload.get("timeout_sec"))
+                            requested_timeout = float(payload["timeout_sec"]) if payload.get("timeout_sec") is not None else None
+                            timeout, capped = _effective_timeout(requested_timeout, case_deadline)
+                            result = run_process(command, cwd=cwd, timeout_sec=timeout)
                             if result.get("error"):
-                                raise StepFailure(f"run 失败：{result['error']['message']}", {"command": command})
+                                error = result["error"] or {}
+                                code = error.get("code") or "tool_failed"
+                                message = error.get("message") or "run 失败"
+                                if code == "timeout" and capped:
+                                    raise StepFailure(f"用例超时（{case.get('timeout_sec')}s）", {"command": command})
+                                if code in {"command_not_found", "timeout"}:
+                                    raise RunnerError(message, code=code)
+                                raise StepFailure(f"run 失败：{message}", {"command": command})
                             if result["exit_code"] != expected:
                                 raise StepFailure(
                                     f"run 退出码 {result['exit_code']}，期望 {expected}：{tail(result.get('stderr', ''), 500)}",
@@ -603,12 +660,8 @@ def execute_smoke(
 
 def scan_workspace(workspace: str | Path) -> dict:
     root = Path(workspace)
-    plan_path = None
-    for relative in (".embeddedskills/verify/plan.json", ".embeddedskills/verify.json", "verify.plan.json"):
-        candidate = root / relative
-        if candidate.is_file():
-            plan_path = str(candidate.resolve())
-            break
+    resolved_plan = resolve_plan_path(str(root))
+    plan_path = str(resolved_plan) if resolved_plan is not None else None
 
     frameworks = []
     if (root / "build" / "CTestTestfile.cmake").is_file() or (root / "CTestTestfile.cmake").is_file():
