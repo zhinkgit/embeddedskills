@@ -33,6 +33,7 @@ from jlink_runtime import (  # noqa: E402
     update_state_entry,
     workspace_root,
     ArgumentParser,
+    resolve_tool_path,
     run_cli,
 )
 
@@ -52,13 +53,18 @@ def start_stream_reader(stream) -> queue.Queue:
 
 
 def _auto_viewer_cmd(config: dict, project_config: dict, state: dict) -> list[str]:
+    viewer_path = ""
     jlink_exe = config.get("exe", "")
-    if not jlink_exe:
-        return []
-
-    exe_path = Path(str(jlink_exe)).expanduser()
-    viewer = exe_path.with_name("JLinkSWOViewerCL.exe")
-    if not viewer.exists():
+    if jlink_exe:
+        exe_path = Path(str(jlink_exe)).expanduser()
+        for name in ("JLinkSWOViewerCL.exe", "JLinkSWOViewerCLExe"):
+            candidate = exe_path.with_name(name)
+            if candidate.exists():
+                viewer_path = str(candidate)
+                break
+    if not viewer_path:
+        viewer_path, _ = resolve_tool_path(["JLinkSWOViewerCL.exe", "JLinkSWOViewerCLExe"])
+    if not viewer_path:
         return []
 
     last_debug = get_state_entry(state, "last_debug")
@@ -69,7 +75,7 @@ def _auto_viewer_cmd(config: dict, project_config: dict, state: dict) -> list[st
 
     # JLinkSWOViewerCL 不同版本支持的参数差异很大。
     # 这里退回到最稳妥的最小命令，只传 device，避免因 -itf/-speed 不兼容直接失败。
-    return [str(viewer), "-device", str(device)]
+    return [viewer_path, "-device", str(device)]
 
 
 def main() -> None:

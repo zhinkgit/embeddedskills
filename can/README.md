@@ -1,6 +1,6 @@
 # can
 
-Claude Code skill，用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、实时监控、报文发送、日志记录、DBC 解码和总线统计。
+用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、实时监控、报文发送、日志记录、DBC 解码和总线统计。
 
 ## 功能
 
@@ -23,7 +23,7 @@ Claude Code skill，用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、�
 
 ### 环境级配置 (`config.json`)
 
-仅保留 slcan 相关的环境级配置：
+如需自定义本机配置，复制 `config.example.json` 为 `config.json`（仅保留 slcan 相关的环境级配置）：
 
 ```json
 {
@@ -96,9 +96,9 @@ Claude Code skill，用于嵌入式 CAN / CAN-FD 总线调试：接口扫描、�
 can/
 ├── README.md
 ├── SKILL.md
-├── config.json
 ├── config.example.json
 ├── scripts/
+│   ├── can_runtime.py
 │   ├── can_scan.py
 │   ├── can_monitor.py
 │   ├── can_send.py

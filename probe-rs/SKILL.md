@@ -22,7 +22,7 @@ Windows 或 Linux，Python 3.10+ 和 probe-rs CLI。源码调试需要对应的 
 
 ### 环境级配置（skill/config.json）
 
-首次使用前建议在 skill 目录下创建 `config.json`：
+如需覆写本机工具路径或端口，可在 skill 目录下复制 `config.example.json` 为 `config.json`（工具已在 PATH 时可省略）：
 
 ```json
 {

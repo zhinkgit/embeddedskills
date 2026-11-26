@@ -1,6 +1,6 @@
 # eide
 
-Claude Code skill，驱动 EIDE (Embedded IDE) 进行工程扫描、构建配置枚举、编译构建，并返回可交给 `jlink/openocd` 的产物路径。
+驱动 EIDE (Embedded IDE) 进行工程扫描、构建配置枚举、编译构建，并返回可交给 `jlink/openocd` 的产物路径。
 
 ## 功能
 

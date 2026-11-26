@@ -1,6 +1,6 @@
 # openocd
 
-Claude Code skill，通过 OpenOCD 进行探针探测、固件烧录、Flash 擦除、GDB Server 启动、目标复位、Telnet 在线调试、GDB 源码级调试以及 Semihosting/ITM 输出捕获。支持 ST-Link、CMSIS-DAP、DAPLink、FTDI 等开源调试器。
+通过 OpenOCD 进行探针探测、固件烧录、Flash 擦除、GDB Server 启动、目标复位、Telnet 在线调试、GDB 源码级调试以及 Semihosting/ITM 输出捕获。支持 ST-Link、CMSIS-DAP、DAPLink、FTDI 等开源调试器。
 
 ## 功能
 

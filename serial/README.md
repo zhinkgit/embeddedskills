@@ -1,6 +1,6 @@
 # serial
 
-Claude Code skill，用于嵌入式串口调试：端口扫描、实时监控、数据发送、Hex 查看和日志记录。
+用于嵌入式串口调试：端口扫描、实时监控、数据发送、Hex 查看和日志记录。
 
 ## 功能
 
@@ -21,7 +21,7 @@ Claude Code skill，用于嵌入式串口调试：端口扫描、实时监控、
 
 ### 环境级配置 (`config.json`)
 
-serial skill 的环境级配置目前为空对象 `{}`，因为串口参数属于工程级配置，统一在工作区的 `.embeddedskills/config.json` 中管理。
+serial skill 的环境级配置示例 `config.example.json` 目前为空对象 `{}`（可省略，无需单独创建 `config.json`），因为串口参数属于工程级配置，统一在工作区的 `.embeddedskills/config.json` 中管理。
 
 ### 工程级配置 (`.embeddedskills/config.json`)
 

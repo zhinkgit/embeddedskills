@@ -137,10 +137,10 @@ npx skills remove -g    # Remove
 
 ```bash
 # Claude Code (global)
-git clone https://github.com/zhinkgit/embeddedskills.git `/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills.git ~/.claude/skills/embeddedskills
 
 # Codex (global)
-git clone https://github.com/zhinkgit/embeddedskills.git `/.codex/skills
+git clone https://github.com/zhinkgit/embeddedskills.git ~/.codex/skills
 
 # Codex (current project only)
 git clone https://github.com/zhinkgit/embeddedskills.git .codex/skills

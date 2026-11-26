@@ -466,7 +466,7 @@ def main() -> None:
         if is_missing(project) and not is_missing(project_config.get("project")):
             project = _resolve_project_path(workspace, project_config.get("project"))
             parameter_sources["project"] = "project_config:project"
-        # state.json（最后 fallback）
+        # .embeddedskills/state/keil.json（最后 fallback）
         if is_missing(project) and not is_missing(last_build.get("project")):
             project = _resolve_project_path(workspace, str(last_build.get("project")))
             parameter_sources["project"] = "state:project"
@@ -482,7 +482,7 @@ def main() -> None:
         if is_missing(target) and not is_missing(project_config.get("target")):
             target = project_config.get("target")
             parameter_sources["target"] = "project_config:target"
-        # state.json（最后 fallback）
+        # .embeddedskills/state/keil.json（最后 fallback）
         if is_missing(target) and not is_missing(last_build.get("target")):
             target = last_build.get("target")
             parameter_sources["target"] = "state:target"

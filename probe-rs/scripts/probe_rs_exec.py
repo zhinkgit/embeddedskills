@@ -29,6 +29,7 @@ from probe_rs_runtime import (
     now_iso,
     output_json,
     parameter_context,
+    resolve_tool_path,
     save_project_config,
     update_state_entry,
     workspace_root,
@@ -145,8 +146,19 @@ def _state_lookup(state: dict) -> dict:
 def resolve_probe_params(args, config: dict, project_config: dict, state_lookup: dict, workspace: str) -> tuple[dict, dict]:
     parameter_sources: dict[str, str] = {}
 
-    exe = args.exe if not is_missing(args.exe) else config.get("exe") or "probe-rs"
-    parameter_sources["exe"] = "cli" if not is_missing(args.exe) else ("config:exe" if config.get("exe") else "default")
+    if not is_missing(args.exe):
+        exe = str(args.exe)
+        parameter_sources["exe"] = "cli"
+    elif not is_missing(config.get("exe")):
+        exe = str(config["exe"])
+        parameter_sources["exe"] = "config:exe"
+    else:
+        exe, exe_source = resolve_tool_path(["probe-rs.exe", "probe-rs"])
+        if not is_missing(exe):
+            parameter_sources["exe"] = exe_source
+        else:
+            exe = "probe-rs"
+            parameter_sources["exe"] = "default"
 
     chip = args.chip
     chip_source = "cli"

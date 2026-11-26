@@ -1,6 +1,6 @@
 # probe-rs
 
-`probe-rs` skill 为本仓库新增的第三调试后端，目标是和现有 `jlink`、`openocd` 保持同一套 JSON 输出和 `workflow` 编排方式。
+`probe-rs` skill 为本仓库的第三调试后端，和现有 `jlink`、`openocd` 保持同一套 JSON 输出规范，并可配合 `workflow` 进行只读规划。
 
 ## 能力范围
 

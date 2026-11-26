@@ -24,7 +24,7 @@ Python 3.10+、PyYAML、当前系统对应的 EIDE unify_builder 与工程编译
 
 ### 环境级配置（skill/config.json）
 
-skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `builder_dir` 路径正确：
+skill 目录下的 `config.json`（可按需从 `config.example.json` 复制创建）包含环境级配置，工具未在 PATH 或默认位置时可在此配置 `builder_dir`：
 
 ```json
 {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -253,6 +254,34 @@ def _first_resolved(mapping: dict, keys: list[str]) -> tuple[Any, str | None]:
         if not is_missing(value):
             return value, key
     return None, None
+
+
+def resolve_tool_path(candidates: list[str] | tuple[str, ...]) -> tuple[str, str]:
+    for candidate in candidates:
+        if is_missing(candidate):
+            continue
+        resolved = shutil.which(str(candidate))
+        if resolved:
+            return normalize_path(resolved), f"path:{candidate}"
+    return "", ""
+
+
+def resolve_command_path(value: str | None, workspace: str | Path | None = None) -> str:
+    if is_missing(value):
+        return ""
+    candidate = str(value).strip()
+    expanded = Path(candidate).expanduser()
+    if expanded.is_absolute():
+        return str(expanded.resolve())
+    if any(sep in candidate for sep in ("/", "\\")):
+        return normalize_path_with_base(candidate, workspace_root(str(workspace)) if workspace else None)
+    resolved = shutil.which(candidate)
+    if resolved:
+        return normalize_path(resolved)
+    local_candidate = (workspace_root(str(workspace)) if workspace else Path.cwd()) / expanded
+    if local_candidate.exists():
+        return str(local_candidate.resolve())
+    return candidate
 
 
 def resolve_param(

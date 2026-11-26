@@ -1,6 +1,6 @@
 # gcc
 
-Claude Code skill，用于基于 CMake + arm-none-eabi-gcc 的嵌入式工程扫描、preset 枚举、配置、构建和 ELF 大小分析。
+用于基于 CMake + arm-none-eabi-gcc 的嵌入式工程扫描、preset 枚举、配置、构建和 ELF 大小分析。
 
 范围说明：当前仅支持 **CMake 型** 嵌入式 GCC 工程，不覆盖纯 `Makefile` 工程。
 

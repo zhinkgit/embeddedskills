@@ -165,7 +165,7 @@ flowchart TD
     B --> C["🔨 自动编译 keil build / gcc build"]
     C -->|有错误| D["🤖 AI 读取编译错误"]
     D --> B
-    C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash"]
+    C -->|通过| E["⚡ 自动烧录 openocd flash / jlink flash"]
     E --> F["🔬 自动调试验证"]
     F -->|异常| G["🤖 AI 读取调试信息"]
     G --> B

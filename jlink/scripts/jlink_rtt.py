@@ -28,7 +28,9 @@ from jlink_runtime import (  # noqa: E402
     now_iso,
     output_json,
     parameter_context,
+    resolve_command_path,
     resolve_param,
+    resolve_tool_path,
     save_project_config,
     update_state_entry,
     workspace_root,
@@ -161,7 +163,7 @@ def _state_lookup(state: dict) -> dict:
 
 
 def resolve_device_params(args, project_config: dict, state_lookup: dict) -> dict:
-    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > state.json > default"""
+    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > .embeddedskills/state/jlink.json > default"""
     # device: CLI > 工程配置 > state > 报错
     device = args.device
     device_source = "cli"
@@ -249,19 +251,32 @@ def main() -> None:
             args.gdbserver_exe,
             config=config,
             config_keys=["gdbserver_exe"],
-            required=True,
-            normalize_as_path=True,
-            workspace=str(workspace),
+            required=False,
         )
+        if not is_missing(gdbserver_exe):
+            gdbserver_exe = resolve_command_path(str(gdbserver_exe), workspace)
+        else:
+            gdbserver_exe, parameter_sources["gdbserver_exe"] = resolve_tool_path(
+                ["JLinkGDBServerCL.exe", "JLinkGDBServerCLExe"]
+            )
+        if is_missing(gdbserver_exe):
+            raise ValueError("缺少必要参数: gdbserver_exe")
+
         rtt_exe, parameter_sources["rtt_exe"] = resolve_param(
             "rtt_exe",
             args.rtt_exe,
             config=config,
             config_keys=["rtt_exe"],
-            required=True,
-            normalize_as_path=True,
-            workspace=str(workspace),
+            required=False,
         )
+        if not is_missing(rtt_exe):
+            rtt_exe = resolve_command_path(str(rtt_exe), workspace)
+        else:
+            rtt_exe, parameter_sources["rtt_exe"] = resolve_tool_path(
+                ["JLinkRTTClient.exe", "JLinkRTTClient"]
+            )
+        if is_missing(rtt_exe):
+            raise ValueError("缺少必要参数: rtt_exe")
         interface = dev_params["interface"]
         parameter_sources["interface"] = dev_params["interface_source"]
         speed = dev_params["speed"]

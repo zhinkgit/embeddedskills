@@ -341,7 +341,7 @@ def _state_lookup(state: dict) -> dict:
 
 
 def resolve_openocd_params(args, project_config: dict, state_lookup: dict) -> dict:
-    """解析 OpenOCD 工程级参数，优先级: CLI > 工程配置 > state.json"""
+    """解析 OpenOCD 工程级参数，优先级: CLI > 工程配置 > .embeddedskills/state/openocd.json"""
     # board: CLI > 工程配置 > state
     board = args.board
     board_source = "cli"

@@ -29,7 +29,9 @@ from jlink_runtime import (  # noqa: E402
     now_iso,
     output_json,
     parameter_context,
+    resolve_command_path,
     resolve_param,
+    resolve_tool_path,
     save_project_config,
     update_state_entry,
     workspace_root,
@@ -178,7 +180,7 @@ def _state_lookup(state: dict) -> dict:
 
 
 def resolve_device_params(args, project_config: dict, state_lookup: dict) -> dict:
-    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > state.json > default"""
+    """解析 device/interface/speed 参数，优先级: CLI > 工程配置 > .embeddedskills/state/jlink.json > default"""
     # device: CLI > 工程配置 > state > 报错
     device = args.device
     device_source = "cli"
@@ -280,19 +282,32 @@ def main() -> None:
             args.gdbserver_exe,
             config=config,
             config_keys=["gdbserver_exe"],
-            required=True,
-            normalize_as_path=True,
-            workspace=str(workspace),
+            required=False,
         )
+        if not is_missing(gdbserver_exe):
+            gdbserver_exe = resolve_command_path(str(gdbserver_exe), workspace)
+        else:
+            gdbserver_exe, parameter_sources["gdbserver_exe"] = resolve_tool_path(
+                ["JLinkGDBServerCL.exe", "JLinkGDBServerCLExe"]
+            )
+        if is_missing(gdbserver_exe):
+            raise ValueError("缺少必要参数: gdbserver_exe")
+
         gdb_exe, parameter_sources["gdb_exe"] = resolve_param(
             "gdb_exe",
             args.gdb_exe,
             config=config,
             config_keys=["gdb_exe"],
-            required=True,
-            normalize_as_path=True,
-            workspace=str(workspace),
+            required=False,
         )
+        if not is_missing(gdb_exe):
+            gdb_exe = resolve_command_path(str(gdb_exe), workspace)
+        else:
+            gdb_exe, parameter_sources["gdb_exe"] = resolve_tool_path(
+                ["arm-none-eabi-gdb.exe", "arm-none-eabi-gdb"]
+            )
+        if is_missing(gdb_exe):
+            raise ValueError("缺少必要参数: gdb_exe")
         # device 从工程配置或 state 解析
         device = dev_params["device"]
         parameter_sources["device"] = dev_params["device_source"]

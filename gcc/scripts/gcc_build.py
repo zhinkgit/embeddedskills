@@ -397,8 +397,15 @@ def main() -> None:
             config_keys=["cmake_exe"],
         )
         if is_missing(cmake_exe):
+            for candidate in ("cmake.exe", "cmake"):
+                resolved = shutil.which(candidate)
+                if resolved:
+                    cmake_exe = normalize_path(resolved)
+                    parameter_sources["cmake"] = f"path:{candidate}"
+                    break
+        if is_missing(cmake_exe):
             cmake_exe = "cmake"
-            parameter_sources["cmake"] = "default:path:cmake"
+            parameter_sources["cmake"] = "default:cmake"
         
         # project: CLI > 工程级配置 > 本技能状态文件 > 必需
         project, parameter_sources["project"] = resolve_param(
@@ -411,7 +418,7 @@ def main() -> None:
         if is_missing(project) and not is_missing(project_config.get("project")):
             project = _resolve_project_path(workspace, project_config.get("project"))
             parameter_sources["project"] = "project_config:project"
-        # state.json（最后 fallback）
+        # .embeddedskills/state/gcc.json（最后 fallback）
         if is_missing(project) and not is_missing(last_build.get("project")):
             project = _resolve_project_path(workspace, str(last_build.get("project")))
             parameter_sources["project"] = "state:project"
@@ -427,7 +434,7 @@ def main() -> None:
         if is_missing(preset) and not is_missing(project_config.get("preset")):
             preset = project_config.get("preset")
             parameter_sources["preset"] = "project_config:preset"
-        # state.json（最后 fallback）
+        # .embeddedskills/state/gcc.json（最后 fallback）
         if is_missing(preset) and not is_missing(last_build.get("preset")):
             preset = last_build.get("preset")
             parameter_sources["preset"] = "state:preset"

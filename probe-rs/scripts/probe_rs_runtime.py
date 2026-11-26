@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -233,6 +234,16 @@ def _first_resolved(mapping: dict, keys: list[str]) -> tuple[Any, str | None]:
         if not is_missing(value):
             return value, key
     return None, None
+
+
+def resolve_tool_path(candidates: list[str] | tuple[str, ...]) -> tuple[str, str]:
+    for candidate in candidates:
+        if is_missing(candidate):
+            continue
+        resolved = shutil.which(str(candidate))
+        if resolved:
+            return normalize_path(resolved), f"path:{candidate}"
+    return "", ""
 
 
 def resolve_param(

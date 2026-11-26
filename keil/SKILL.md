@@ -21,7 +21,7 @@ Windows、Python 3.10+ 和 Keil MDK 的 UV4.exe。
 
 ### 环境级配置（skill/config.json）
 
-skill 目录下的 `config.json` 包含环境级配置，首次使用前确认 `uv4_exe` 路径正确：
+skill 目录下的 `config.json`（可按需从 `config.example.json` 复制创建）包含环境级配置，工具未加入 PATH 或默认安装目录时可在此配置 `uv4_exe`：
 
 ```json
 {

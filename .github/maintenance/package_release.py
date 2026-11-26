@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 FIXED_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
-EXCLUDED_PARTS = {".git", ".github", ".venv", "__pycache__", "dist", "tests"}
+EXCLUDED_PARTS = {".git", ".github", ".venv", "__pycache__", "dist", "tests", "config.json"}
 
 
 def repository_root() -> Path:
@@ -39,7 +39,7 @@ def validate_version(version: str) -> str:
 
 def included(path: Path, root: Path, output_directory: Path | None = None) -> bool:
     relative = path.relative_to(root)
-    if any(part in EXCLUDED_PARTS for part in relative.parts):
+    if any(part in EXCLUDED_PARTS or part.lower() == "config.json" for part in relative.parts):
         return False
     if output_directory and is_output_path(path, root, output_directory):
         return False

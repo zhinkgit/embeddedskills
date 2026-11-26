@@ -1,6 +1,6 @@
 # keil
 
-Claude Code skill，驱动 Keil MDK 进行工程扫描、Target 枚举、编译构建，并返回可交给 `jlink/openocd` 的产物路径。`flash` 保留为兼容入口。
+驱动 Keil MDK 进行工程扫描、Target 枚举、编译构建，并返回可交给 `jlink/openocd` 的产物路径。`flash` 保留为兼容入口。
 
 ## 功能
 

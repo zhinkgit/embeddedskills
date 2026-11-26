@@ -37,7 +37,7 @@ flowchart TD
     B --> C["🔨 自动编译 keil build / gcc build"]
     C -->|有错误| D["🤖 AI 读取编译错误"]
     D --> B
-    C -->|通过| E["⚡ 自动烧录 openоcd flash / jlink flash / probe-rs flash"]
+    C -->|通过| E["⚡ 自动烧录 openocd flash / jlink flash / probe-rs flash"]
     E --> F["🔬 自动调试验证"]
     F -->|异常| G["🤖 AI 读取调试信息"]
     G --> B
@@ -137,7 +137,7 @@ npx skills remove -g    # 移除
 
 ```bash
 # Claude Code（全局）
-git clone https://github.com/zhinkgit/embeddedskills `/.claude/skills/embeddedskills
+git clone https://github.com/zhinkgit/embeddedskills ~/.claude/skills/embeddedskills
 
 # 仅当前项目
 git clone https://github.com/zhinkgit/embeddedskills .claude/skills/embeddedskills

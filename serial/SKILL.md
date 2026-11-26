@@ -21,7 +21,7 @@ Windows 或 Linux，Python 3.10+ 和 pyserial。mux 需要 Linux、socat 和 PTY
 
 ### 环境级配置 (`skill/config.json`)
 
-serial skill 的环境级配置目前为空对象 `{}`，因为串口参数属于工程级配置，统一在工作区的 `.embeddedskills/config.json` 中管理。
+serial skill 的环境级配置示例 `config.example.json` 目前为空对象 `{}`（可省略，无需单独创建 `config.json`），因为串口参数属于工程级配置，统一在工作区的 `.embeddedskills/config.json` 中管理。
 
 ### 工程级配置 (`.embeddedskills/config.json`)
 

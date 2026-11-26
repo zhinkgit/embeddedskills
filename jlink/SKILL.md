@@ -21,7 +21,7 @@ Python 3.10+ 和对应系统的 SEGGER J-Link 工具。GDB 调试、RTT、SWO �
 
 ### 环境级配置（skill/config.json）
 
-skill 目录下的 `config.json` 包含环境级配置（工具路径、端口号等），首次使用前确认 `exe` 路径正确：
+skill 目录下的 `config.json`（可从 `config.example.json` 复制创建）包含环境级配置（工具路径、端口号等），工具未加入 PATH 时确认 `exe` 路径正确：
 
 ```json
 {
@@ -114,7 +114,7 @@ skill 目录下的 `config.json` 包含环境级配置（工具路径、端口�
 
 ## 脚本调用
 
-skill 目录下有四个 Python 脚本，使用标准库实现，无额外依赖。
+skill 目录下提供以下主要 Python 入口脚本，使用标准库实现，无额外依赖。
 
 ### jlink_exec.py — 基础操作 + 轻量调试
 
@@ -161,7 +161,7 @@ python <skill-dir>/scripts/jlink_exec.py run-to --device GD32F470ZG --address 0x
 python <skill-dir>/scripts/jlink_rtt.py --device GD32F470ZG --json
 ```
 
-可选参数：`--serial-no`、`--channel`、`--encoding`、`--rtt-port`、`--gdbserver-exe <路径>`、`--rtt-exe <路径>`
+可选参数：`--serial-no`、`--channel`、`--rtt-port`、`--gdbserver-exe <路径>`、`--rtt-exe <路径>`
 
 RTT 工作原理：脚本先通过 JLinkGDBServerCL.exe 建立调试连接，再启动 JLinkRTTClient.exe 读取 RTT 数据。`--json` 模式输出 JSON Lines。
 

@@ -24,7 +24,7 @@ Windows 或 Linux，Python 3.10+、OpenOCD、目标和适配器配置。源码�
 
 ### 环境级配置（skill/config.json）
 
-skill 目录下的 `config.json` 包含环境级配置（工具路径、端口号等），首次使用前确认 `exe` 路径正确：
+skill 目录下的 `config.json`（可按需从 `config.example.json` 复制创建）包含环境级配置（工具路径、端口号等），工具未加入 PATH 时可在此配置 `exe`：
 
 ```json
 {

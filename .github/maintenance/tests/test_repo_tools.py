@@ -109,6 +109,10 @@ class ReleasePackageTests(unittest.TestCase):
             skill = root / "demo"
             (skill / "tests").mkdir(parents=True)
             (skill / "SKILL.md").write_text("demo", encoding="utf-8")
+            (skill / "config.example.json").write_text("{}\n", encoding="utf-8")
+            (skill / "config.json").write_text('{"exe": "local"}\n', encoding="utf-8")
+            (skill / "nested").mkdir()
+            (skill / "nested" / "CONFIG.JSON").write_text('{"exe": "local"}\n', encoding="utf-8")
             (skill / "script.py").write_text("print('ok')\n", encoding="utf-8")
             (skill / "tests" / "test_demo.py").write_text("", encoding="utf-8")
             (root / "LICENSE").write_text("MIT", encoding="utf-8")
@@ -124,6 +128,9 @@ class ReleasePackageTests(unittest.TestCase):
             )
             with zipfile.ZipFile(first / "embeddedskills-demo-1.0.0.zip") as archive:
                 self.assertIn("demo/SKILL.md", archive.namelist())
+                self.assertIn("demo/config.example.json", archive.namelist())
+                self.assertNotIn("demo/config.json", archive.namelist())
+                self.assertNotIn("demo/nested/CONFIG.JSON", archive.namelist())
                 self.assertNotIn("demo/tests/test_demo.py", archive.namelist())
 
             checksum_file = write_checksums(first, first_archives)

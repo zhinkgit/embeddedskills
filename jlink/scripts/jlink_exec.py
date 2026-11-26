@@ -22,6 +22,8 @@ from jlink_runtime import (
     update_state_entry,
     workspace_root,
     normalize_path,
+    resolve_command_path,
+    resolve_tool_path,
     hidden_subprocess_kwargs,
     is_missing,
     ArgumentParser,
@@ -335,8 +337,8 @@ def resolve_device_params(args):
     """解析 exe/device/interface/speed/serial_no 参数。
 
     优先级:
-    - exe / serial_no: CLI > 环境级配置
-    - device / interface / speed: CLI > 工程配置 > state.json > 默认值
+    - exe / serial_no: CLI > 环境级配置 > PATH
+    - device / interface / speed: CLI > 工程配置 > .embeddedskills/state/jlink.json > 默认值
     """
     workspace = workspace_root(args.workspace)
     local_config = load_local_config(__file__)
@@ -383,14 +385,16 @@ def resolve_device_params(args):
         speed = "4000"
         speed_source = "default"
 
-    # exe: CLI > 环境级配置
+    # exe: CLI > 环境级配置 > PATH
     exe = args.exe
     exe_source = "cli"
     if is_missing(exe):
         exe = local_config.get("exe", "")
         exe_source = "config" if not is_missing(exe) else ""
+    if is_missing(exe):
+        exe, exe_source = resolve_tool_path(["JLink.exe", "JLinkExe"])
     if not is_missing(exe):
-        exe = normalize_path(str(exe))
+        exe = resolve_command_path(str(exe), workspace)
 
     # serial_no: CLI > 环境级配置 > state
     serial_no = args.serial_no
@@ -520,7 +524,7 @@ def main():
             "interface": params["interface"],
             "speed": params["speed"],
         })
-        # 同时更新 state.json
+        # 同时更新 .embeddedskills/state/jlink.json
         if args.action in ("flash", "reset", "halt", "go", "step", "run-to", "info"):
             state_action = "last_flash" if args.action == "flash" else "last_debug"
             update_state_entry(
